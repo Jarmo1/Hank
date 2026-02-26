@@ -7,10 +7,15 @@ const requestTimeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 12000);
 const client = apiKey ? new OpenAI({ apiKey }) : null;
 
 function promptForProfile(profile) {
+  const variantHint = profile.planVariant
+    ? `\nPlan variation request: ${profile.planVariant}`
+    : '';
+
   return `You are an elite fitness and nutrition coach. Return VALID JSON only.
 
 User profile:
 ${JSON.stringify(profile, null, 2)}
+${variantHint}
 
 Build a complete app-ready plan with this schema:
 {
@@ -53,6 +58,7 @@ Constraints:
 - Use progressive overload-friendly exercise choices and include at least 2 main lifts per day.
 - Meal ideas must align to targetCalories with rough per-meal calorie guidance.
 - Ensure nutrition numbers are internally consistent (daily targets should approximately match macro calories).
+- Produce a clearly fresh variant when a variation request is provided (different meals/exercise selections while still matching profile targets).
 `;
 }
 
