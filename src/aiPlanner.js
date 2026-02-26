@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 
 const apiKey = process.env.OPENAI_API_KEY;
 const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const requestTimeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 12000);
 
 const client = apiKey ? new OpenAI({ apiKey }) : null;
 
@@ -54,18 +55,24 @@ Constraints:
 export async function generateAiPlan(profile) {
   if (!client) return null;
 
-  const response = await client.chat.completions.create({
-    model,
-    temperature: 0.4,
-    messages: [
-      { role: 'system', content: 'You create safe personalized training and nutrition plans.' },
-      { role: 'user', content: promptForProfile(profile) }
-    ],
-    response_format: { type: 'json_object' }
-  });
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      temperature: 0.4,
+      timeout: requestTimeoutMs,
+      messages: [
+        { role: 'system', content: 'You create safe personalized training and nutrition plans.' },
+        { role: 'user', content: promptForProfile(profile) }
+      ],
+      response_format: { type: 'json_object' }
+    });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) return null;
+    const content = response.choices[0]?.message?.content;
+    if (!content) return null;
 
-  return JSON.parse(content);
+    return JSON.parse(content);
+  } catch (error) {
+    console.warn('AI plan generation failed; falling back to rule-based planner.', error?.message || error);
+    return null;
+  }
 }
