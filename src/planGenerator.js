@@ -78,8 +78,17 @@ function withEquipmentFallback(exercises, equipmentAccess = '') {
 }
 
 function createTrainingDay(dayNumber, focus, muscles, equipmentAccess, conditioning) {
-  const mainLifts = muscles.flatMap((muscle) => exerciseLibrary[muscle] || []).slice(0, 3);
-  const accessoryPool = [...(exerciseLibrary.core || []), ...(exerciseLibrary.calves || [])];
+  const primaryPool = muscles.flatMap((muscle) => exerciseLibrary[muscle] || []);
+  const mainLifts = primaryPool.slice(0, 3);
+  const accessoryPool = primaryPool.slice(3);
+
+  if (/core/i.test(focus)) {
+    accessoryPool.push(...(exerciseLibrary.core || []));
+  }
+
+  if (/calves/i.test(focus)) {
+    accessoryPool.push(...(exerciseLibrary.calves || []));
+  }
 
   return {
     day: `Day ${dayNumber}`,
