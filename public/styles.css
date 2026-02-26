@@ -333,3 +333,68 @@ ul {
     align-items: flex-start;
   }
 }
+
+.hidden {
+  display: none;
+}
+
+#dashboard {
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tab {
+  border: 1px solid var(--line);
+  background: rgba(39, 39, 42, 0.8);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #d4d4d8;
+  color: #111;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.7rem;
+}
+
+.mini-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: rgba(24, 24, 27, 0.55);
+}
+
+.stack {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0.45rem;
+  font-size: 0.9rem;
+}

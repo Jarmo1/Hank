@@ -6,16 +6,48 @@ const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const client = apiKey ? new OpenAI({ apiKey }) : null;
 
 function promptForProfile(profile) {
-  return `You are an elite fitness and nutrition coach. Return valid JSON only with keys: summary, nutrition, training, recovery.
+  return `You are an elite fitness and nutrition coach. Return VALID JSON only.
 
 User profile:
 ${JSON.stringify(profile, null, 2)}
 
-Requirements:
-- nutrition must include targetCalories, macros (proteinGrams, carbsGrams, fatsGrams), mealIdeas array.
-- training must include weeklySchedule array, cardio, progression.
-- recovery must include sleepHours, stressManagement array.
+Build a complete app-ready plan with this schema:
+{
+  "summary": string,
+  "nutrition": {
+    "targetCalories": number,
+    "macros": { "proteinGrams": number, "carbsGrams": number, "fatsGrams": number },
+    "hydrationLiters": number,
+    "mealIdeas": string[],
+    "mealStructure": [{ "meal": string, "targetProtein": number, "note": string }],
+    "groceryList": string[]
+  },
+  "activity": {
+    "weeklySchedule": [{ "day": string, "focus": string, "mainLifts": string[], "accessories": string[], "conditioning": string }],
+    "cardio": string,
+    "stepTarget": string,
+    "progression": string
+  },
+  "bodyMetrics": {
+    "targetRate": string,
+    "checkInDays": string[],
+    "adjustmentRules": string[]
+  },
+  "recovery": {
+    "sleepHours": string,
+    "deload": string,
+    "stressManagement": string[]
+  },
+  "foodLoggerTemplate": {
+    "dailyTargets": { "calories": number, "proteinGrams": number, "carbsGrams": number, "fatsGrams": number },
+    "prompts": string[]
+  }
+}
+
+Constraints:
 - Keep recommendations realistic and safe.
+- Respect injuries/limitations and equipment access.
+- Weekly schedule length must match workoutDays.
 `;
 }
 
