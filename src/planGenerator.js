@@ -39,128 +39,123 @@ function macroSplit(goal, calories) {
   };
 }
 
-function pickWorkoutTemplate(workoutDays) {
+const exerciseLibrary = {
+  chest: ['Bench Press 4x6', 'Incline DB Press 3x10', 'Cable Fly 3x12'],
+  back: ['Barbell Row 4x8', 'Lat Pulldown 3x10', 'Chest Supported Row 3x12'],
+  shoulders: ['Overhead Press 4x6', 'Lateral Raise 3x15', 'Face Pull 3x15'],
+  biceps: ['EZ Bar Curl 3x12', 'Hammer Curl 3x12'],
+  triceps: ['Triceps Pressdown 3x12', 'Overhead Triceps Extension 3x12'],
+  quads: ['Back Squat 4x6', 'Leg Press 3x12', 'Walking Lunge 3x10/leg'],
+  hamstrings: ['Romanian Deadlift 4x8', 'Leg Curl 3x12'],
+  glutes: ['Hip Thrust 4x8', 'Bulgarian Split Squat 3x10/leg'],
+  calves: ['Standing Calf Raise 4x15'],
+  core: ['Plank 3x45s', 'Ab Wheel 3x10']
+};
+
+function withEquipmentFallback(exercises, equipmentAccess = '') {
+  const lowEquipment = ['none', 'bodyweight', 'home', 'minimal'].some((term) =>
+    equipmentAccess.toLowerCase().includes(term)
+  );
+
+  if (!lowEquipment) return exercises;
+
+  const substitutions = {
+    'Bench Press 4x6': 'Push-up Variations 4xAMRAP',
+    'Incline DB Press 3x10': 'Feet-Elevated Push-up 3x12',
+    'Cable Fly 3x12': 'Resistance Band Fly 3x15',
+    'Barbell Row 4x8': 'Backpack Row 4x12',
+    'Lat Pulldown 3x10': 'Band Lat Pulldown 3x15',
+    'Chest Supported Row 3x12': 'Single-arm DB/Backpack Row 3x12',
+    'Overhead Press 4x6': 'Pike Push-up 4x10',
+    'Back Squat 4x6': 'Goblet Squat 4x10',
+    'Leg Press 3x12': 'Split Squat 3x12',
+    'Romanian Deadlift 4x8': 'Single-leg RDL 4x10',
+    'Hip Thrust 4x8': 'Glute Bridge 4x15',
+    'Standing Calf Raise 4x15': 'Single-leg Calf Raise 4x20'
+  };
+
+  return exercises.map((exercise) => substitutions[exercise] ?? exercise);
+}
+
+function createTrainingDay(dayNumber, focus, muscles, equipmentAccess, conditioning) {
+  const mainLifts = muscles.flatMap((muscle) => exerciseLibrary[muscle] || []).slice(0, 3);
+  const accessoryPool = [...(exerciseLibrary.core || []), ...(exerciseLibrary.calves || [])];
+
+  return {
+    day: `Day ${dayNumber}`,
+    focus,
+    mainLifts: withEquipmentFallback(mainLifts, equipmentAccess),
+    accessories: withEquipmentFallback(accessoryPool.slice(0, 2), equipmentAccess),
+    conditioning
+  };
+}
+
+function workoutSplit(workoutDays, equipmentAccess = '') {
   if (workoutDays <= 3) {
     return [
-      {
-        day: 'Day 1',
-        focus: 'Full Body Strength',
-        mainLifts: ['Back Squat 4x5', 'Bench Press 4x6', 'Barbell Row 4x8'],
-        accessories: ['Walking Lunges 3x10', 'Plank 3x45s'],
-        conditioning: '10-15 minutes low-impact intervals'
-      },
-      {
-        day: 'Day 2',
-        focus: 'Full Body Hypertrophy',
-        mainLifts: ['Romanian Deadlift 4x8', 'Incline DB Press 4x10', 'Lat Pulldown 4x10'],
-        accessories: ['Hip Thrust 3x12', 'Lateral Raises 3x15'],
-        conditioning: '20 minutes zone 2 cardio'
-      },
-      {
-        day: 'Day 3',
-        focus: 'Conditioning + Accessories',
-        mainLifts: ['Goblet Squat 4x10', 'Push-ups 4xAMRAP', 'Single-arm Row 4x12'],
-        accessories: ['Cable Face Pull 3x15', 'Farmer Carry 4 rounds'],
-        conditioning: '6x1 minute hard/2 minute easy intervals'
-      }
-    ];
+      createTrainingDay(1, 'Chest + Back', ['chest', 'back'], equipmentAccess, '10-15 min zone 2 bike or incline walk'),
+      createTrainingDay(2, 'Legs + Core', ['quads', 'hamstrings', 'glutes'], equipmentAccess, '8 rounds of 30s hard / 60s easy'),
+      createTrainingDay(3, 'Shoulders + Arms', ['shoulders', 'biceps', 'triceps'], equipmentAccess, '10 min low-impact cardio cooldown')
+    ].slice(0, workoutDays);
   }
 
   if (workoutDays === 4) {
     return [
-      {
-        day: 'Day 1',
-        focus: 'Upper Strength',
-        mainLifts: ['Bench Press 5x5', 'Weighted Pull-up 4x6'],
-        accessories: ['Seated Row 3x10', 'Triceps Pressdown 3x12'],
-        conditioning: '10 minute incline walk'
-      },
-      {
-        day: 'Day 2',
-        focus: 'Lower Strength',
-        mainLifts: ['Back Squat 5x5', 'Deadlift 4x4'],
-        accessories: ['Leg Curl 3x12', 'Calf Raise 3x15'],
-        conditioning: '10 minute bike flush'
-      },
-      {
-        day: 'Day 3',
-        focus: 'Upper Hypertrophy',
-        mainLifts: ['Incline DB Press 4x10', 'Chest Supported Row 4x10'],
-        accessories: ['Lateral Raise 3x15', 'Biceps Curl 3x12'],
-        conditioning: '15 minute rower steady pace'
-      },
-      {
-        day: 'Day 4',
-        focus: 'Lower Hypertrophy + Conditioning',
-        mainLifts: ['Front Squat 4x8', 'Romanian Deadlift 4x10'],
-        accessories: ['Walking Lunge 3x12', 'Core Circuit 3 rounds'],
-        conditioning: '8 rounds sled push or 30/30 bike'
-      }
+      createTrainingDay(1, 'Chest + Biceps', ['chest', 'biceps'], equipmentAccess, '10 min incline walk'),
+      createTrainingDay(2, 'Back + Triceps', ['back', 'triceps'], equipmentAccess, '10 min rower flush'),
+      createTrainingDay(3, 'Quads + Calves', ['quads', 'calves'], equipmentAccess, '12 min zone 2 bike'),
+      createTrainingDay(4, 'Hamstrings + Glutes + Shoulders', ['hamstrings', 'glutes', 'shoulders'], equipmentAccess, '6 rounds sled push or brisk intervals')
     ];
   }
 
   return [
-    {
-      day: 'Day 1',
-      focus: 'Push',
-      mainLifts: ['Bench Press 5x5', 'Overhead Press 4x6'],
-      accessories: ['Dips 3xAMRAP', 'Triceps Extension 3x12'],
-      conditioning: '10 minute bike'
-    },
-    {
-      day: 'Day 2',
-      focus: 'Pull',
-      mainLifts: ['Weighted Pull-up 5x5', 'Barbell Row 4x8'],
-      accessories: ['Face Pull 3x15', 'Hammer Curl 3x12'],
-      conditioning: '10 minute row'
-    },
-    {
-      day: 'Day 3',
-      focus: 'Legs',
-      mainLifts: ['Back Squat 5x5', 'Romanian Deadlift 4x8'],
-      accessories: ['Leg Press 3x12', 'Calf Raise 4x15'],
-      conditioning: '10 minute incline walk'
-    },
-    {
-      day: 'Day 4',
-      focus: 'Upper Power + Volume',
-      mainLifts: ['Bench Press 6x3', 'Pendlay Row 5x5'],
-      accessories: ['Incline DB Press 3x12', 'Lat Pulldown 3x12'],
-      conditioning: 'Battle rope intervals 8 rounds'
-    },
-    {
-      day: 'Day 5',
-      focus: 'Lower + Conditioning',
-      mainLifts: ['Front Squat 4x6', 'Hip Thrust 4x8'],
-      accessories: ['Bulgarian Split Squat 3x10', 'Ab Wheel 3x12'],
-      conditioning: '15-20 minute zone 2 bike'
-    },
+    createTrainingDay(1, 'Push (Chest + Shoulders + Triceps)', ['chest', 'shoulders', 'triceps'], equipmentAccess, '8-10 min easy cardio'),
+    createTrainingDay(2, 'Pull (Back + Biceps)', ['back', 'biceps'], equipmentAccess, '10 min row'),
+    createTrainingDay(3, 'Legs (Quads + Hamstrings + Calves)', ['quads', 'hamstrings', 'calves'], equipmentAccess, '10 min incline walk'),
+    createTrainingDay(4, 'Chest + Back Volume', ['chest', 'back'], equipmentAccess, '12 min zone 2'),
+    createTrainingDay(5, 'Glutes + Shoulders + Arms', ['glutes', 'shoulders', 'biceps', 'triceps'], equipmentAccess, '10 min mixed intervals'),
     {
       day: 'Day 6',
       focus: 'Active Recovery',
       mainLifts: ['Mobility Flow 20 min', 'Bodyweight Circuit 3 rounds'],
-      accessories: ['Band Work', 'Deep Stretching'],
+      accessories: ['Band Pull Aparts 3x20', 'Deep Stretching 10 min'],
       conditioning: 'Long walk 45-60 minutes'
     }
-  ];
+  ].slice(0, workoutDays);
 }
 
-function mealIdeas(dietaryPreferences = '') {
+function mealIdeas(dietaryPreferences = '', targetCalories = 2200) {
   const isVegetarian = dietaryPreferences.toLowerCase().includes('vegetarian');
+  const mealTargets = {
+    breakfast: Math.round(targetCalories * 0.25),
+    lunch: Math.round(targetCalories * 0.3),
+    dinner: Math.round(targetCalories * 0.3),
+    snack: Math.round(targetCalories * 0.15)
+  };
+
   if (isVegetarian) {
     return [
-      'Greek yogurt + oats + berries + nuts',
-      'Tofu stir-fry with rice and mixed vegetables',
-      'Lentil pasta with tomato sauce and side salad',
-      'Protein smoothie with banana, spinach, and soy milk'
+      `Breakfast (~${mealTargets.breakfast} kcal): Greek yogurt + oats + berries + nuts`,
+      `Lunch (~${mealTargets.lunch} kcal): Tofu stir-fry with rice and mixed vegetables`,
+      `Dinner (~${mealTargets.dinner} kcal): Lentil pasta with tomato sauce and side salad`,
+      `Snack (~${mealTargets.snack} kcal): Protein smoothie with banana, spinach, and soy milk`
     ];
   }
 
   return [
-    'Egg scramble + toast + fruit',
-    'Chicken rice bowl with mixed vegetables and avocado',
-    'Salmon, sweet potato, and broccoli',
-    'Lean beef burrito bowl with beans and salsa'
+    `Breakfast (~${mealTargets.breakfast} kcal): Egg scramble + toast + fruit`,
+    `Lunch (~${mealTargets.lunch} kcal): Chicken rice bowl with mixed vegetables and avocado`,
+    `Dinner (~${mealTargets.dinner} kcal): Salmon, sweet potato, and broccoli`,
+    `Snack (~${mealTargets.snack} kcal): Lean beef wrap or Greek yogurt + granola`
+  ];
+}
+
+function mealStructureFromMacros(macros) {
+  return [
+    { meal: 'Breakfast', targetProtein: Math.round(macros.proteinGrams * 0.25), note: 'Protein + fiber first meal.' },
+    { meal: 'Lunch', targetProtein: Math.round(macros.proteinGrams * 0.3), note: 'Largest carb meal near training window.' },
+    { meal: 'Dinner', targetProtein: Math.round(macros.proteinGrams * 0.3), note: 'Balanced plate and vegetables.' },
+    { meal: 'Snack', targetProtein: Math.round(macros.proteinGrams * 0.15), note: 'High protein snack to hit daily target.' }
   ];
 }
 
@@ -169,21 +164,16 @@ export function buildRuleBasedPlan(profile) {
   const tdee = Math.round(bmr * activityMultiplier(profile.activityLevel));
   const targetCalories = caloriesForGoal(tdee, profile.goal);
   const macros = macroSplit(profile.goal, targetCalories);
-  const weeklySchedule = pickWorkoutTemplate(profile.workoutDays).slice(0, profile.workoutDays);
+  const weeklySchedule = workoutSplit(profile.workoutDays, profile.equipmentAccess);
 
   return {
-    summary: `Comprehensive plan for ${profile.fullName} with auto-regeneration when profile changes.`,
+    summary: `Personalized ${profile.goal.replace('_', ' ')} plan for ${profile.fullName} (${profile.workoutDays} training days/week), aligned to profile inputs and constraints.`,
     nutrition: {
       targetCalories,
       macros,
       hydrationLiters: 2.5,
-      mealIdeas: mealIdeas(profile.dietaryPreferences),
-      mealStructure: [
-        { meal: 'Breakfast', targetProtein: 35, note: 'Protein + fiber first meal.' },
-        { meal: 'Lunch', targetProtein: 40, note: 'Largest carb meal near training window.' },
-        { meal: 'Dinner', targetProtein: 35, note: 'Balanced plate and vegetables.' },
-        { meal: 'Snack', targetProtein: 25, note: 'High protein snack to hit daily target.' }
-      ],
+      mealIdeas: mealIdeas(profile.dietaryPreferences, targetCalories),
+      mealStructure: mealStructureFromMacros(macros),
       groceryList: ['Lean protein source', 'Fruit + vegetables', 'Whole grains', 'Healthy fats', 'Hydration/electrolytes']
     },
     activity: {
