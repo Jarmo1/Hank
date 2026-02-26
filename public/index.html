@@ -516,10 +516,16 @@
                             <h2 class="text-2xl font-bold">Workout Tracker</h2>
                             <p class="text-slate-400">Track your lifts and progressive overload</p>
                         </div>
-                        <button onclick="openWorkoutModal()" class="muscle-gradient text-white px-6 py-3 rounded-xl font-medium hover:opacity-90 transition-opacity flex items-center gap-2 shadow-lg shadow-red-500/25">
-                            <i data-lucide="plus" class="w-5 h-5"></i>
-                            New Workout
-                        </button>
+                        <div class="flex items-center gap-3">
+                            <button onclick="generateWorkoutPlan()" class="bg-slate-800 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-medium transition-colors flex items-center gap-2 border border-slate-700">
+                                <i data-lucide="sparkles" class="w-5 h-5"></i>
+                                Generate Plan
+                            </button>
+                            <button onclick="openWorkoutModal()" class="muscle-gradient text-white px-6 py-3 rounded-xl font-medium hover:opacity-90 transition-opacity flex items-center gap-2 shadow-lg shadow-red-500/25">
+                                <i data-lucide="plus" class="w-5 h-5"></i>
+                                New Workout
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Workout Templates -->
@@ -1001,6 +1007,90 @@
             return 4;
         }
 
+        function normalizeExerciseName(name) {
+            return String(name || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, ' ')
+                .trim();
+        }
+
+        function resolveExerciseFromLibrary(liftName) {
+            const normalizedLift = normalizeExerciseName(extractExerciseName(liftName));
+            if (!normalizedLift) return null;
+
+            const aliasMap = {
+                'incline db press': 'Incline Bench Press',
+                'db press': 'Dumbbell Shoulder Press',
+                'weighted pull up': 'Pull-ups',
+                'pull up': 'Pull-ups',
+                'seated row': 'Seated Cable Row',
+                'chest supported row': 'Seated Cable Row',
+                'lat pulldown': 'Lat Pulldown',
+                'calf raise': 'Calf Raises',
+                'lateral raise': 'Lateral Raises',
+                'face pull': 'Face Pulls',
+                'biceps curl': 'Dumbbell Curls',
+                'hammer curl': 'Hammer Curls',
+                'triceps extension': 'Overhead Tricep Extension',
+                'triceps pressdown': 'Tricep Pushdowns',
+                'walking lunge': 'Lunges',
+                'walking lunges': 'Lunges',
+                'core circuit': 'Plank',
+                'ab wheel': 'Leg Raises',
+                'pendlay row': 'Barbell Row',
+                'goblet squat': 'Squat',
+                'hip thrust': 'Romanian Deadlift',
+                'front squat': 'Squat'
+            };
+
+            const aliasTarget = aliasMap[normalizedLift];
+            if (aliasTarget) {
+                const aliasMatch = exerciseDB.find((exercise) => exercise.name === aliasTarget);
+                if (aliasMatch) return aliasMatch;
+            }
+
+            let directMatch = exerciseDB.find((exercise) => normalizeExerciseName(exercise.name) === normalizedLift);
+            if (directMatch) return directMatch;
+
+            directMatch = exerciseDB.find((exercise) => {
+                const candidate = normalizeExerciseName(exercise.name);
+                return candidate.includes(normalizedLift) || normalizedLift.includes(candidate);
+            });
+
+            return directMatch || null;
+        }
+
+        function buildWorkoutFromSchedule(scheduleDay) {
+            if (!scheduleDay) return;
+
+            const generatedExercises = [...(scheduleDay.mainLifts || []), ...(scheduleDay.accessories || [])]
+                .map(resolveExerciseFromLibrary)
+                .filter(Boolean);
+
+            startWorkout(scheduleDay.focus || 'Generated Workout');
+
+            if (!generatedExercises.length) {
+                const fallback = ['Bench Press', 'Barbell Row', 'Squat']
+                    .map((exerciseName) => exerciseDB.find((exercise) => exercise.name === exerciseName))
+                    .filter(Boolean);
+                fallback.forEach((exercise) => addExerciseToActiveWorkout(exercise));
+                return;
+            }
+
+            generatedExercises.forEach((exercise) => addExerciseToActiveWorkout(exercise));
+        }
+
+        function generateWorkoutPlan() {
+            if (appState.generatedSchedule.length > 0) {
+                const dayIndex = appState.workouts.length % appState.generatedSchedule.length;
+                const scheduledDay = appState.generatedSchedule[dayIndex];
+                buildWorkoutFromSchedule(scheduledDay);
+                return;
+            }
+
+            startTemplateWorkout('ppl');
+        }
+
         async function syncBackendPlan() {
             const alias = appState.user.name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'user';
             const payload = {
@@ -1214,15 +1304,7 @@
 
             if (appState.generatedSchedule.length > 0) {
                 const scheduledDay = appState.generatedSchedule[scheduleIndex] || appState.generatedSchedule[0];
-                const generatedExercises = [...(scheduledDay.mainLifts || []), ...(scheduledDay.accessories || [])]
-                    .map(extractExerciseName)
-                    .filter(Boolean);
-
-                startWorkout(scheduledDay.focus || 'AI Generated Workout');
-                generatedExercises.forEach((liftName) => {
-                    const matched = exerciseDB.find((e) => liftName.toLowerCase().includes(e.name.toLowerCase()) || e.name.toLowerCase().includes(liftName.toLowerCase()));
-                    if (matched) addExerciseToActiveWorkout(matched);
-                });
+                buildWorkoutFromSchedule(scheduledDay);
                 return;
             }
 
@@ -1481,8 +1563,8 @@
                 container.innerHTML = `
                     <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
                         <p class="text-slate-400 mb-2">No workout logged yet today</p>
-                        <button onclick="startTemplateWorkout('ppl')" class="text-red-400 hover:text-red-300 font-medium flex items-center gap-2">
-                            Start ${suggestion} <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                        <button onclick="generateWorkoutPlan()" class="text-red-400 hover:text-red-300 font-medium flex items-center gap-2">
+                            Start Generated ${suggestion} <i data-lucide="arrow-right" class="w-4 h-4"></i>
                         </button>
                     </div>
                 `;
