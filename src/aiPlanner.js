@@ -49,6 +49,10 @@ Constraints:
 - Keep recommendations realistic and safe.
 - Respect injuries/limitations and equipment access.
 - Weekly schedule length must match workoutDays.
+- Make each training day muscle-group specific (e.g., Chest + Biceps), not generic random exercise lists.
+- Use progressive overload-friendly exercise choices and include at least 2 main lifts per day.
+- Meal ideas must align to targetCalories with rough per-meal calorie guidance.
+- Ensure nutrition numbers are internally consistent (daily targets should approximately match macro calories).
 `;
 }
 
