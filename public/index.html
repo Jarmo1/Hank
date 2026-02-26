@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
+    <title>GymPlan AI</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>GymPlan AI</h1>
+        <p>Generate personalized workouts + nutrition from your profile.</p>
+      </header>
+
+      <form id="profile-form" class="card">
+        <h2>Your Profile</h2>
+        <div class="grid">
+          <label>Full name <input name="fullName" required /></label>
+          <label>Age <input name="age" type="number" min="13" max="90" required /></label>
+          <label>Sex
+            <select name="sex" required>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </label>
+          <label>Weight (kg) <input name="weightKg" type="number" required /></label>
+          <label>Height (cm) <input name="heightCm" type="number" required /></label>
+          <label>Weekly workout days <input name="workoutDays" type="number" min="2" max="6" required /></label>
+          <label>Goal
+            <select name="goal" required>
+              <option value="fat_loss">Fat loss</option>
+              <option value="muscle_gain">Muscle gain</option>
+              <option value="recomposition">Recomposition</option>
+              <option value="maintenance">Maintenance</option>
+            </select>
+          </label>
+          <label>Activity
+            <select name="activityLevel" required>
+              <option value="sedentary">Sedentary</option>
+              <option value="light">Light</option>
+              <option value="moderate">Moderate</option>
+              <option value="active">Active</option>
+              <option value="athlete">Athlete</option>
+            </select>
+          </label>
+          <label class="full">Dietary preferences <input name="dietaryPreferences" placeholder="e.g. vegetarian, halal" /></label>
+          <label class="full">Equipment access <input name="equipmentAccess" placeholder="e.g. full gym, dumbbells only" /></label>
+          <label class="full">Injuries/limitations <input name="injuries" placeholder="Any injuries to account for" /></label>
+          <label class="full">Extra notes <textarea name="notes" rows="3"></textarea></label>
+        </div>
+        <button type="submit">Generate Plan</button>
+        <p id="status"></p>
+      </form>
+
+      <section id="plan" class="card hidden"></section>
+    </main>
+
+    <script src="/main.js" type="module"></script>
+  </body>
+</html>
