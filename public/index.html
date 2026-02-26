@@ -1983,39 +1983,63 @@
             updateVolumeChart();
         }
 
+        function getCurrentWeekRange() {
+            const now = new Date();
+            const dayOfWeek = now.getDay();
+            const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+            const start = new Date(now);
+            start.setDate(now.getDate() + mondayOffset);
+            start.setHours(0, 0, 0, 0);
+
+            const end = new Date(start);
+            end.setDate(start.getDate() + 7);
+
+            return { start, end };
+        }
+
+        function getRecentProgressEntries(limit = 12) {
+            return appState.progress.slice(-limit);
+        }
+
         function updateVolumeChart() {
             if (!appState.charts.volume) return;
-            
-            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+            const { start, end } = getCurrentWeekRange();
             const data = new Array(7).fill(0);
-            
-            appState.workouts.forEach(w => {
-                const day = new Date(w.date).getDay();
+
+            appState.workouts.forEach((w) => {
+                const workoutDate = new Date(w.date);
+                if (workoutDate < start || workoutDate >= end) return;
+
+                const day = workoutDate.getDay();
                 data[day] += w.totalVolume || 0;
             });
-            
+
             // Rotate so Monday is first
             const rotated = [...data.slice(1), data[0]];
             const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            
+
             appState.charts.volume.data.labels = labels;
             appState.charts.volume.data.datasets[0].data = rotated;
             appState.charts.volume.update();
         }
 
         function updateProgressCharts() {
+            const recentProgress = getRecentProgressEntries();
+
             // Weight chart
             const weightCtx = document.getElementById('weightChart');
-            if (weightCtx && appState.progress.length > 0) {
+            if (weightCtx && recentProgress.length > 0) {
                 if (appState.charts.weight) appState.charts.weight.destroy();
-                
+
                 appState.charts.weight = new Chart(weightCtx, {
                     type: 'line',
                     data: {
-                        labels: appState.progress.map(p => p.date.slice(5)),
+                        labels: recentProgress.map(p => p.date.slice(5)),
                         datasets: [{
                             label: 'Weight (kg)',
-                            data: appState.progress.map(p => p.weight),
+                            data: recentProgress.map(p => p.weight),
                             borderColor: '#dc2626',
                             backgroundColor: 'rgba(220, 38, 38, 0.1)',
                             fill: true,
