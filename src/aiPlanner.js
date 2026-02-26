@@ -69,12 +69,13 @@ export async function generateAiPlan(profile) {
     const response = await client.chat.completions.create({
       model,
       temperature: 0.4,
-      timeout: requestTimeoutMs,
       messages: [
         { role: 'system', content: 'You create safe personalized training and nutrition plans.' },
         { role: 'user', content: promptForProfile(profile) }
       ],
       response_format: { type: 'json_object' }
+    }, {
+      timeout: requestTimeoutMs
     });
 
     const content = response.choices[0]?.message?.content;
