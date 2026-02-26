@@ -154,6 +154,10 @@ async function refreshDashboard(email) {
 
   const dashboard = await response.json();
   state.foodLogs = dashboard.foodLogs || [];
+  if (dashboard.plan?.plan_json) {
+    state.plan = dashboard.plan.plan_json;
+    state.source = dashboard.plan.source || state.source;
+  }
   renderTabContent();
 }
 
@@ -162,6 +166,15 @@ profileForm.addEventListener('submit', async (event) => {
   statusEl.textContent = 'Generating full account plan...';
 
   const data = Object.fromEntries(new FormData(profileForm).entries());
+  const profileNotes = [
+    data.notes,
+    data.experienceLevel ? `Experience level: ${data.experienceLevel}` : '',
+    data.calorieSurplus ? `Preferred surplus: +${data.calorieSurplus} kcal` : ''
+  ]
+    .filter(Boolean)
+    .join(' | ');
+
+  data.notes = profileNotes;
 
   try {
     const response = await fetch('/api/account', {
