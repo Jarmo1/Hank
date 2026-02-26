@@ -1,61 +1,141 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="scroll-smooth">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#111827" />
+    <meta name="theme-color" content="#171717" />
     <title>GymPlan AI</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app">
-      <header>
-        <h1>GymPlan AI</h1>
-        <p>Generate personalized workouts + nutrition from your profile.</p>
+    <div class="ambient-glow" aria-hidden="true"></div>
+    <div class="page-gradient" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="glass-card hero-card">
+        <div class="logo-wrap">
+          <img src="/logo.png" alt="GymPlan AI logo" class="logo" />
+          <span class="logo-gloss" aria-hidden="true"></span>
+        </div>
+        <div class="hero-copy">
+          <div class="hero-title-row">
+            <h1>ForgeAI</h1>
+            <span>GymPlan AI</span>
+          </div>
+          <p>Generate personalised workouts &amp; nutrition from your profile.</p>
+        </div>
       </header>
 
-      <form id="profile-form" class="card">
-        <h2>Your Profile</h2>
-        <div class="grid">
-          <label>Full name <input name="fullName" required /></label>
-          <label>Age <input name="age" type="number" min="13" max="90" required /></label>
-          <label>Sex
-            <select name="sex" required>
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-            </select>
-          </label>
-          <label>Weight (kg) <input name="weightKg" type="number" required /></label>
-          <label>Height (cm) <input name="heightCm" type="number" required /></label>
-          <label>Weekly workout days <input name="workoutDays" type="number" min="2" max="6" required /></label>
-          <label>Goal
-            <select name="goal" required>
-              <option value="fat_loss">Fat loss</option>
-              <option value="muscle_gain">Muscle gain</option>
-              <option value="recomposition">Recomposition</option>
-              <option value="maintenance">Maintenance</option>
-            </select>
-          </label>
-          <label>Activity
-            <select name="activityLevel" required>
-              <option value="sedentary">Sedentary</option>
-              <option value="light">Light</option>
-              <option value="moderate">Moderate</option>
-              <option value="active">Active</option>
-              <option value="athlete">Athlete</option>
-            </select>
-          </label>
-          <label class="full">Dietary preferences <input name="dietaryPreferences" placeholder="e.g. vegetarian, halal" /></label>
-          <label class="full">Equipment access <input name="equipmentAccess" placeholder="e.g. full gym, dumbbells only" /></label>
-          <label class="full">Injuries/limitations <input name="injuries" placeholder="Any injuries to account for" /></label>
-          <label class="full">Extra notes <textarea name="notes" rows="3"></textarea></label>
+      <section class="glass-card form-card">
+        <div class="section-heading">
+          <div class="silver-bar" aria-hidden="true"></div>
+          <h2>Your Profile</h2>
         </div>
-        <button type="submit">Generate Plan</button>
-        <p id="status"></p>
-      </form>
 
-      <section id="plan" class="card hidden"></section>
+        <form id="profile-form" novalidate>
+          <div class="grid grid-3">
+            <label>
+              <span class="field-label">Full Name</span>
+              <input name="fullName" required placeholder="John Doe" />
+              <small>Enter your full name</small>
+            </label>
+            <label>
+              <span class="field-label">Age</span>
+              <input name="age" type="number" min="13" max="90" required placeholder="25" />
+              <small>Must be 13 or older</small>
+            </label>
+            <label>
+              <span class="field-label">Sex</span>
+              <select name="sex" required>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+              <small>Used for metabolic calculations</small>
+            </label>
+
+            <label>
+              <span class="field-label">Weight (kg)</span>
+              <input name="weightKg" type="number" min="30" max="300" required placeholder="75" />
+              <small>Current body weight in kilograms</small>
+            </label>
+            <label>
+              <span class="field-label">Height (cm)</span>
+              <input name="heightCm" type="number" min="120" max="230" required placeholder="175" />
+              <small>Height in centimeters</small>
+            </label>
+            <label>
+              <span class="field-label">Weekly Workout Days</span>
+              <select name="workoutDays" required>
+                <option value="2">2 days</option>
+                <option value="3">3 days</option>
+                <option value="4">4 days</option>
+                <option value="5">5 days</option>
+                <option value="6">6 days</option>
+              </select>
+              <small>How many days can you train?</small>
+            </label>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="grid grid-2">
+            <label>
+              <span class="field-label">Primary Goal</span>
+              <select name="goal" required>
+                <option value="fat_loss">Fat loss</option>
+                <option value="muscle_gain">Muscle gain</option>
+                <option value="recomposition">Recomposition</option>
+                <option value="maintenance">Maintenance</option>
+              </select>
+              <small>Main objective for your training</small>
+            </label>
+            <label>
+              <span class="field-label">Activity Level</span>
+              <select name="activityLevel" required>
+                <option value="sedentary">Sedentary</option>
+                <option value="light">Light</option>
+                <option value="moderate">Moderate</option>
+                <option value="active">Active</option>
+                <option value="athlete">Athlete</option>
+              </select>
+              <small>Daily activity outside workouts</small>
+            </label>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="grid grid-2">
+            <label>
+              <span class="field-label">Dietary Preferences</span>
+              <input name="dietaryPreferences" placeholder="e.g. vegetarian, halal, keto" />
+              <small>Any dietary restrictions or preferences</small>
+            </label>
+            <label>
+              <span class="field-label">Equipment Access</span>
+              <input name="equipmentAccess" placeholder="e.g. full gym, dumbbells only" />
+              <small>What equipment do you have?</small>
+            </label>
+            <label class="full">
+              <span class="field-label">Injuries / Limitations</span>
+              <input name="injuries" placeholder="Any injuries or physical limitations" />
+              <small>We'll adapt exercises to avoid aggravation</small>
+            </label>
+            <label class="full">
+              <span class="field-label">Extra Notes</span>
+              <textarea name="notes" rows="4" placeholder="Any additional context for your AI coach..."></textarea>
+              <small>Optional but useful for a better plan</small>
+            </label>
+          </div>
+
+          <button type="submit" class="chrome-button">Generate Plan</button>
+          <p id="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section id="plan" class="glass-card hidden"></section>
     </main>
 
     <script src="/main.js" type="module"></script>

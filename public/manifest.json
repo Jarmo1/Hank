@@ -3,7 +3,14 @@
   "short_name": "GymPlan",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b1020",
-  "theme_color": "#111827",
-  "icons": []
+  "background_color": "#090909",
+  "theme_color": "#171717",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
 }
