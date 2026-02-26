@@ -144,6 +144,21 @@
             background: linear-gradient(135deg, rgba(220, 38, 38, 0.15) 0%, rgba(153, 27, 27, 0.2) 100%);
             border: 1px solid rgba(220, 38, 38, 0.3);
         }
+
+        .chart-frame {
+            position: relative;
+            height: 240px;
+            width: 100%;
+        }
+
+        .chart-frame.chart-frame-lg {
+            height: 280px;
+        }
+
+        .chart-frame canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen overflow-x-hidden">
@@ -706,7 +721,9 @@
                         <!-- Weight Chart -->
                         <div class="lg:col-span-2 glass-card rounded-2xl p-6 border border-slate-700">
                             <h3 class="font-semibold text-lg mb-4">Weight Progression</h3>
-                            <canvas id="weightChart" height="250"></canvas>
+                            <div class="chart-frame chart-frame-lg">
+                                <canvas id="weightChart"></canvas>
+                            </div>
                         </div>
 
                         <!-- Stats Summary -->
@@ -737,15 +754,21 @@
                         <div class="grid md:grid-cols-3 gap-6">
                             <div>
                                 <h4 class="text-sm font-medium text-slate-400 mb-2">Bench Press</h4>
-                                <canvas id="benchChart" height="200"></canvas>
+                                <div class="chart-frame">
+                                    <canvas id="benchChart"></canvas>
+                                </div>
                             </div>
                             <div>
                                 <h4 class="text-sm font-medium text-slate-400 mb-2">Squat</h4>
-                                <canvas id="squatChart" height="200"></canvas>
+                                <div class="chart-frame">
+                                    <canvas id="squatChart"></canvas>
+                                </div>
                             </div>
                             <div>
                                 <h4 class="text-sm font-medium text-slate-400 mb-2">Deadlift</h4>
-                                <canvas id="deadliftChart" height="200"></canvas>
+                                <div class="chart-frame">
+                                    <canvas id="deadliftChart"></canvas>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -896,7 +919,8 @@
             backendPlan: null,
             accountId: null,
             planSource: null,
-            generatedSchedule: []
+            generatedSchedule: [],
+            mealPlanGenerationCount: 0
         };
 
         // Exercise Database
@@ -1084,6 +1108,8 @@
         function buildWorkoutFromSchedule(scheduleDay) {
             if (!scheduleDay) return;
 
+            showActiveWorkoutPanel();
+
             const generatedExercises = [...(scheduleDay.mainLifts || []), ...(scheduleDay.accessories || [])]
                 .map(resolveExerciseFromLibrary)
                 .filter(Boolean);
@@ -1099,6 +1125,11 @@
             }
 
             generatedExercises.forEach((exercise) => addExerciseToActiveWorkout(exercise));
+        }
+
+        function showActiveWorkoutPanel() {
+            document.getElementById('noActiveWorkout').classList.add('hidden-section');
+            document.getElementById('activeWorkout').classList.remove('hidden-section');
         }
 
         function generateWorkoutPlan() {
@@ -1271,8 +1302,7 @@
 
         // Workout Functions
         function openWorkoutModal() {
-            document.getElementById('noActiveWorkout').classList.add('hidden-section');
-            document.getElementById('activeWorkout').classList.remove('hidden-section');
+            showActiveWorkoutPanel();
             startWorkout('Custom Workout');
         }
 
@@ -1322,6 +1352,8 @@
         function startTemplateWorkout(template) {
             const scheduleMap = { ppl: 0, upperlower: 1, fullbody: 2 };
             const scheduleIndex = scheduleMap[template] ?? 0;
+
+            showActiveWorkoutPanel();
 
             if (appState.generatedSchedule.length > 0) {
                 const scheduledDay = appState.generatedSchedule[scheduleIndex] || appState.generatedSchedule[0];
@@ -1595,11 +1627,14 @@
 
         // Meal Plan Functions
         function generateMealPlan() {
+            appState.mealPlanGenerationCount += 1;
+
             if (appState.backendPlan?.nutrition) {
                 const target = appState.backendPlan.nutrition;
                 const ideas = target.mealIdeas || [];
                 const structure = target.mealStructure || [];
                 const mealSlots = ['7:00 AM', '10:00 AM', '1:00 PM', '4:00 PM', '7:00 PM'];
+                const mealRotationOffset = appState.mealPlanGenerationCount % Math.max(ideas.length || 1, 1);
 
                 const caloriesTarget = Number(target.targetCalories || 0);
                 const proteinTarget = Number(target.macros?.proteinGrams || 0);
@@ -1608,7 +1643,7 @@
                 const split = Math.max(structure.length, 1);
 
                 appState.meals = (structure.length ? structure : [{ meal: 'Meal Plan', note: 'Generated by AI' }]).map((item, index) => ({
-                    name: ideas[index % Math.max(ideas.length, 1)] || item.note || 'Balanced meal',
+                    name: ideas[(index + mealRotationOffset) % Math.max(ideas.length, 1)] || item.note || 'Balanced meal',
                     calories: Math.round(caloriesTarget / split),
                     protein: Math.round(proteinTarget / split),
                     carbs: Math.round(carbsTarget / split),
