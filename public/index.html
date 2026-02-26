@@ -884,7 +884,11 @@
             workouts: [],
             progress: [],
             water: 0,
-            charts: {}
+            charts: {},
+            backendPlan: null,
+            accountId: null,
+            planSource: null,
+            generatedSchedule: []
         };
 
         // Exercise Database
@@ -964,7 +968,7 @@
             document.getElementById('surplusDisplay').textContent = `+${e.target.value} kcal`;
         });
 
-        document.getElementById('onboardingForm').addEventListener('submit', (e) => {
+        document.getElementById('onboardingForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             appState.user = {
@@ -978,9 +982,60 @@
                 surplus: parseInt(document.getElementById('calorieSurplus').value)
             };
 
+            await syncBackendPlan();
             saveData();
             initApp();
         });
+
+        function mapActivityLevel(multiplier) {
+            if (multiplier <= 1.2) return 'sedentary';
+            if (multiplier <= 1.375) return 'light';
+            if (multiplier <= 1.55) return 'moderate';
+            if (multiplier <= 1.725) return 'active';
+            return 'athlete';
+        }
+
+        function workoutDaysFromProfile() {
+            if (appState.user.activityLevel >= 1.725) return 5;
+            if (appState.user.activityLevel <= 1.375) return 3;
+            return 4;
+        }
+
+        async function syncBackendPlan() {
+            const alias = appState.user.name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'user';
+            const payload = {
+                email: `${alias}@ironpulse.app`,
+                fullName: appState.user.name,
+                age: appState.user.age,
+                sex: appState.user.gender,
+                weightKg: appState.user.weight,
+                heightCm: appState.user.height,
+                goal: 'muscle_gain',
+                activityLevel: mapActivityLevel(appState.user.activityLevel),
+                workoutDays: workoutDaysFromProfile(),
+                dietaryPreferences: document.getElementById('dietPreference')?.value || '',
+                equipmentAccess: 'full gym',
+                injuries: '',
+                notes: `Experience: ${appState.user.experienceLevel}; Preferred surplus: +${appState.user.surplus} kcal`
+            };
+
+            try {
+                const response = await fetch('/api/account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Failed to generate backend plan');
+
+                appState.backendPlan = result.plan;
+                appState.accountId = result.accountId;
+                appState.planSource = result.source;
+                appState.generatedSchedule = result.plan?.activity?.weeklySchedule || [];
+            } catch (error) {
+                console.warn('Backend plan generation failed. Using in-app planner fallback.', error);
+            }
+        }
 
         function calculateBMI(weight, height) {
             return (weight / ((height / 100) ** 2)).toFixed(1);
@@ -1013,13 +1068,14 @@
             document.getElementById('bmiDisplay').textContent = bmi;
             document.getElementById('bmiCategory').textContent = bmi < 18.5 ? 'Underweight' : bmi < 25 ? 'Normal' : bmi < 30 ? 'Overweight' : 'Obese';
             document.getElementById('tdeeDisplay').textContent = tdee;
-            document.getElementById('targetCalories').textContent = target;
+            const backendCalories = appState.backendPlan?.nutrition?.targetCalories;
+            document.getElementById('targetCalories').textContent = backendCalories || target;
             document.getElementById('currentWeightDisplay').textContent = `${appState.user.weight} kg`;
             
-            // Set macro targets (40/40/20 for muscle gain)
-            const protein = Math.round(appState.user.weight * 2.2); // 2.2g per kg
-            const fats = Math.round((target * 0.25) / 9);
-            const carbs = Math.round((target - (protein * 4) - (fats * 9)) / 4);
+            // Set macro targets (prefer backend AI plan when available)
+            const protein = appState.backendPlan?.nutrition?.macros?.proteinGrams || Math.round(appState.user.weight * 2.2); // 2.2g per kg
+            const fats = appState.backendPlan?.nutrition?.macros?.fatsGrams || Math.round((target * 0.25) / 9);
+            const carbs = appState.backendPlan?.nutrition?.macros?.carbsGrams || Math.round((target - (protein * 4) - (fats * 9)) / 4);
             
             document.getElementById('proteinTarget').textContent = `${protein}g`;
             document.getElementById('carbsTarget').textContent = `${carbs}g`;
@@ -1143,7 +1199,33 @@
             document.getElementById('workoutTimer').textContent = formatted;
         }
 
+        function extractExerciseName(liftText) {
+            const cleaned = String(liftText || '')
+                .replace(/\d+\s*x\s*\d+/gi, '')
+                .replace(/\d+\s*min/gi, '')
+                .replace(/\([^)]*\)/g, '')
+                .trim();
+            return cleaned.split(' - ')[0].trim();
+        }
+
         function startTemplateWorkout(template) {
+            const scheduleMap = { ppl: 0, upperlower: 1, fullbody: 2 };
+            const scheduleIndex = scheduleMap[template] ?? 0;
+
+            if (appState.generatedSchedule.length > 0) {
+                const scheduledDay = appState.generatedSchedule[scheduleIndex] || appState.generatedSchedule[0];
+                const generatedExercises = [...(scheduledDay.mainLifts || []), ...(scheduledDay.accessories || [])]
+                    .map(extractExerciseName)
+                    .filter(Boolean);
+
+                startWorkout(scheduledDay.focus || 'AI Generated Workout');
+                generatedExercises.forEach((liftName) => {
+                    const matched = exerciseDB.find((e) => liftName.toLowerCase().includes(e.name.toLowerCase()) || e.name.toLowerCase().includes(liftName.toLowerCase()));
+                    if (matched) addExerciseToActiveWorkout(matched);
+                });
+                return;
+            }
+
             const templates = {
                 ppl: { name: 'Push Day - PPL', exercises: ['Bench Press', 'Incline Dumbbell Press', 'Cable Flyes', 'Lateral Raises', 'Tricep Pushdowns', 'Overhead Tricep Extension'] },
                 upperlower: { name: 'Upper Body Day', exercises: ['Bench Press', 'Barbell Row', 'Overhead Press', 'Lat Pulldown', 'Dumbbell Curls', 'Tricep Pushdowns'] },
@@ -1410,6 +1492,39 @@
 
         // Meal Plan Functions
         function generateMealPlan() {
+            if (appState.backendPlan?.nutrition) {
+                const target = appState.backendPlan.nutrition;
+                const ideas = target.mealIdeas || [];
+                const structure = target.mealStructure || [];
+                const mealSlots = ['7:00 AM', '10:00 AM', '1:00 PM', '4:00 PM', '7:00 PM'];
+
+                const caloriesTarget = Number(target.targetCalories || 0);
+                const proteinTarget = Number(target.macros?.proteinGrams || 0);
+                const carbsTarget = Number(target.macros?.carbsGrams || 0);
+                const fatsTarget = Number(target.macros?.fatsGrams || 0);
+                const split = Math.max(structure.length, 1);
+
+                appState.meals = (structure.length ? structure : [{ meal: 'Meal Plan', note: 'Generated by AI' }]).map((item, index) => ({
+                    name: ideas[index % Math.max(ideas.length, 1)] || item.note || 'Balanced meal',
+                    calories: Math.round(caloriesTarget / split),
+                    protein: Math.round(proteinTarget / split),
+                    carbs: Math.round(carbsTarget / split),
+                    fats: Math.round(fatsTarget / split),
+                    time: item.meal || `Meal ${index + 1}`,
+                    slot: mealSlots[index % mealSlots.length]
+                }));
+
+                document.getElementById('mealPlanCalories').textContent = `${caloriesTarget} kcal`;
+                document.getElementById('mealPlanProtein').textContent = `${proteinTarget}g`;
+                document.getElementById('mealPlanCarbs').textContent = `${carbsTarget}g`;
+                document.getElementById('mealPlanFats').textContent = `${fatsTarget}g`;
+
+                renderMealPlan();
+                updateNextMeal();
+                saveData();
+                return;
+            }
+
             const preference = document.getElementById('dietPreference').value;
             const targetCalories = parseInt(document.getElementById('targetCalories').textContent) || 3000;
             
@@ -1943,7 +2058,11 @@
                 progress: appState.progress,
                 meals: appState.meals,
                 loggedFoods: appState.loggedFoods,
-                water: appState.water
+                water: appState.water,
+                backendPlan: appState.backendPlan,
+                accountId: appState.accountId,
+                planSource: appState.planSource,
+                generatedSchedule: appState.generatedSchedule
             };
             localStorage.setItem('ironpulse_data', JSON.stringify(data));
         }
@@ -1958,6 +2077,10 @@
                 appState.meals = data.meals || [];
                 appState.loggedFoods = data.loggedFoods || [];
                 appState.water = data.water || 0;
+                appState.backendPlan = data.backendPlan || null;
+                appState.accountId = data.accountId || null;
+                appState.planSource = data.planSource || null;
+                appState.generatedSchedule = data.generatedSchedule || [];
                 
                 if (appState.user) {
                     initApp();
@@ -1995,3 +2118,7 @@
                 document.getElementById('appContainer').classList.add('hidden-section');
             }
         });
+
+    </script>
+</body>
+</html>
