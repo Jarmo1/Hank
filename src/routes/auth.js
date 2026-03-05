@@ -92,12 +92,12 @@ router.post('/signout', (_req, res) => {
 // GET /api/auth/me
 router.get('/me', (req, res) => {
   const token = req.cookies?.[COOKIE_NAME];
-  if (!token) return res.status(401).json({ error: 'Not authenticated.' });
+  if (!token) return res.json({ userId: null });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     return res.json({ userId: payload.userId });
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired session.' });
+    return res.json({ userId: null });
   }
 });
 

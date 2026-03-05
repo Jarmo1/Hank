@@ -74,6 +74,7 @@ function showScreen(name) {
 async function checkAuth() {
   try {
     const data = await api('GET', '/api/auth/me');
+    if (!data.userId) throw new Error('Not authenticated');
     state.user = { id: data.userId };
     const pd = await api('GET', '/api/profile');
     state.user = pd.user || state.user;
