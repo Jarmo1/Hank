@@ -31,7 +31,10 @@ router.post('/meal', requireAuth, async (req, res) => {
 router.get('/meal', requireAuth, async (req, res) => {
   try {
     const row = await getLatestMealPlan(req.userId);
-    if (!row) return res.status(404).json({ error: 'No meal plan found. Generate one first.' });
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    if (!row) return res.json({ plan: null, source: null, createdAt: null, planId: null });
     return res.json({ plan: row.plan_json, source: row.source, createdAt: row.created_at, planId: row.id });
   } catch (err) {
     console.error('Get meal plan error:', err);
@@ -64,7 +67,10 @@ router.post('/workout', requireAuth, async (req, res) => {
 router.get('/workout', requireAuth, async (req, res) => {
   try {
     const row = await getActiveWorkoutPlan(req.userId);
-    if (!row) return res.status(404).json({ error: 'No workout plan found. Generate one first.' });
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    if (!row) return res.json({ plan: null, source: null, createdAt: null, planId: null });
     return res.json({ plan: row.plan_json, source: row.source, createdAt: row.created_at, planId: row.id });
   } catch (err) {
     console.error('Get workout plan error:', err);

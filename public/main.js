@@ -353,11 +353,13 @@ async function loadMealsScreen() {
       const d = await api('GET', '/api/plans/meal');
       state.mealPlan = d.plan;
     } catch {
-      document.getElementById('meals-loading').style.display = 'none';
+      state.mealPlan = null;
+    }
+    document.getElementById('meals-loading').style.display = 'none';
+    if (!state.mealPlan?.days?.length) {
       document.getElementById('meals-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🍽️</div><p>No meal plan yet. Generate one to get started.</p></div>`;
       return;
     }
-    document.getElementById('meals-loading').style.display = 'none';
   }
   renderMealsScreen(0);
 }
@@ -401,6 +403,8 @@ function renderMealsScreen(dayIdx) {
   `;
 }
 
+window.renderMealsScreen = renderMealsScreen;
+
 async function generateMealPlan() {
   toast('Generating meal plan...');
   try {
@@ -411,6 +415,8 @@ async function generateMealPlan() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+window.generateMealPlan = generateMealPlan;
+
 // ── Workout plan ────────────────────────────────────────────
 
 async function loadWorkoutScreen() {
@@ -420,11 +426,13 @@ async function loadWorkoutScreen() {
       const d = await api('GET', '/api/plans/workout');
       state.workoutPlan = d.plan;
     } catch {
-      document.getElementById('workout-loading').style.display = 'none';
+      state.workoutPlan = null;
+    }
+    document.getElementById('workout-loading').style.display = 'none';
+    if (!state.workoutPlan?.days?.length) {
       document.getElementById('workout-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🏋️</div><p>No workout plan yet.</p></div>`;
       return;
     }
-    document.getElementById('workout-loading').style.display = 'none';
   }
   renderWorkoutScreen();
 }
@@ -466,6 +474,8 @@ async function generateWorkoutPlan() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+window.generateWorkoutPlan = generateWorkoutPlan;
+
 // ── Workout Runner ──────────────────────────────────────────
 
 function startRunner(dayIdx) {
@@ -490,6 +500,8 @@ function startRunner(dayIdx) {
 
   renderRunnerExercise();
 }
+
+window.startRunner = startRunner;
 
 function renderRunnerExercise() {
   const r = state.runner;
