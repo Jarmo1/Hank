@@ -25,19 +25,24 @@ const state = {
 // ── API helper ────────────────────────────────────────────
 
 async function api(method, path, body) {
-  try {
-    const res = await fetch(path, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include'
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
-  } catch (e) {
-    throw e;
-  }
+  const headers = body
+    ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+    : { 'Accept': 'application/json' };
+
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'include',
+    cache: 'no-store'
+  });
+
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || `HTTP ${res.status}` }; }
+
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
 // ── Toast ────────────────────────────────────────────────

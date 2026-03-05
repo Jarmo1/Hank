@@ -33,9 +33,13 @@ const apiLimiter = rateLimit({
 });
 
 app.set('trust proxy', 1);
+// API responses are user-specific (cookie-auth) and must never be cached.
+// Disabling ETags avoids 304 responses that can break JSON fetch flows.
+app.set('etag', false);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Keep static asset caching behaviour handled by express.static.
+app.use(express.static(path.join(__dirname, '..', 'public'), { etag: true }));
 
 app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/profile', apiLimiter, profileRouter);

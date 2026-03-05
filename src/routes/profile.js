@@ -4,6 +4,14 @@ import { getProfile, upsertProfile, getUserById } from '../db.js';
 
 const router = express.Router();
 
+router.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
+
 // GET /api/profile
 router.get('/', requireAuth, async (req, res) => {
   try {
