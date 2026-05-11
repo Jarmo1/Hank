@@ -10,6 +10,11 @@ import profileRouter from './routes/profile.js';
 import plansRouter from './routes/plans.js';
 import trackingRouter from './routes/tracking.js';
 import workoutsRouter from './routes/workouts.js';
+import couplesPlanRouter from './routes/couplesPlan.js';
+import shoppingRouter from './routes/shopping.js';
+import scheduleRouter from './routes/schedule.js';
+import pushRouter from './routes/push.js';
+import { startScheduler } from './scheduler.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -33,12 +38,9 @@ const apiLimiter = rateLimit({
 });
 
 app.set('trust proxy', 1);
-// API responses are user-specific (cookie-auth) and must never be cached.
-// Disabling ETags avoids 304 responses that can break JSON fetch flows.
 app.set('etag', false);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
-// Keep static asset caching behaviour handled by express.static.
 app.use(express.static(path.join(__dirname, '..', 'public'), { etag: true }));
 
 app.use('/api/auth', authLimiter, authRouter);
@@ -47,6 +49,12 @@ app.use('/api/plans', apiLimiter, plansRouter);
 app.use('/api/tracking', apiLimiter, trackingRouter);
 app.use('/api/workouts', apiLimiter, workoutsRouter);
 
+// Couples plan / shopping / schedule / push
+app.use('/api/couples-plan', apiLimiter, couplesPlanRouter);
+app.use('/api/shopping', apiLimiter, shoppingRouter);
+app.use('/api/schedule', apiLimiter, scheduleRouter);
+app.use('/api/push', apiLimiter, pushRouter);
+
 // SPA fallback
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
@@ -54,7 +62,10 @@ app.get('*', (_req, res) => {
 
 initDb()
   .then(() => {
-    app.listen(port, () => console.log(`ForgeAI running on port ${port}`));
+    app.listen(port, () => {
+      console.log(`Hank running on port ${port}`);
+      startScheduler();
+    });
   })
   .catch((err) => {
     console.error('DB init failed:', err);
