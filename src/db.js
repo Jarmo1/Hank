@@ -146,6 +146,16 @@ export async function initDb() {
   // (Safe no-op if the constraint name doesn't exist.)
   await pool.query(`ALTER TABLE push_subscriptions DROP CONSTRAINT IF EXISTS push_subscriptions_user_id_key`);
 
+  // Older deployments created push_subscriptions without UNIQUE(endpoint),
+  // which breaks ON CONFLICT (endpoint) in savePushSubscription. Dedupe and
+  // backfill the unique index so the upsert works on existing databases.
+  await pool.query(`
+    DELETE FROM push_subscriptions a
+    USING push_subscriptions b
+    WHERE a.id < b.id AND a.endpoint = b.endpoint
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_key ON push_subscriptions (endpoint)`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_usage_logs (
       id SERIAL PRIMARY KEY,
