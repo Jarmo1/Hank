@@ -1,840 +1,779 @@
-// ── State ─────────────────────────────────────────────────
+(function () {
+  'use strict';
 
-const state = {
-  user: null,
-  profile: null,
-  mealPlan: null,
-  workoutPlan: null,
-  progressLogs: [],
-  ob: { goal: '', step: 1, totalSteps: 5 },
-  runner: {
-    active: false,
+  const DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const DAY_LABELS = { sunday:'Sun', monday:'Mon', tuesday:'Tue', wednesday:'Wed', thursday:'Thu', friday:'Fri', saturday:'Sat' };
+  const DAY_FULL = { sunday:'Sunday', monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', thursday:'Thursday', friday:'Friday', saturday:'Saturday' };
+  const MEAL_LABELS = { breakfast:'Breakfast', lunch:'Lunch', dinner:'Dinner', snacks:'Snacks' };
+  const MEAL_ORDER = { breakfast:0, lunch:1, dinner:2, snacks:3 };
+  const DOW_INITIAL = { 0:'S', 1:'M', 2:'T', 3:'W', 4:'T', 5:'F', 6:'S' };
+  const DOW_ORDER = [1,2,3,4,5,6,0];
+
+  const State = {
+    user: null,
+    plan: null,
     planId: null,
-    day: null,
-    exIdx: 0,
-    setIdx: 0,
-    loggedSets: [],
-    startTime: null,
-    elapsedInterval: null,
-    restInterval: null,
-    restEndTime: null,
-    weightByEx: {}
-  }
-};
+    planSource: null,
+    shopping: { list: null, items: [] },
+    schedule: { events: [], timezone: 'Australia/Brisbane' },
+    vapidKey: null,
+    pushSubscribed: false,
+    tab: 'today',
+    selectedDay: DAYS[new Date().getDay()],
+    authMode: 'signup',
+    authError: ''
+  };
 
-// ── API helper ────────────────────────────────────────────
-
-async function api(method, path, body) {
-  const headers = body
-    ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-    : { 'Accept': 'application/json' };
-
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'include',
-    cache: 'no-store'
-  });
-
-  const text = await res.text();
-  let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || `HTTP ${res.status}` }; }
-
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
-// ── Toast ────────────────────────────────────────────────
-
-let toastTimer;
-function toast(msg, type = '') {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = type ? `show ${type}` : 'show';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = ''; }, 3000);
-}
-
-// ── Screen routing ─────────────────────────────────────────
-
-function showScreen(name) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  const s = document.getElementById(`screen-${name}`);
-  if (s) s.classList.add('active');
-
-  const authScreens = ['auth', 'onboarding'];
-  const showChrome = !authScreens.includes(name);
-  document.getElementById('app-header').style.display = showChrome ? '' : 'none';
-  document.getElementById('app-nav').style.display = showChrome ? '' : 'none';
-
-  // Update nav active state
-  document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.nav === name);
-  });
-}
-
-// ── Auth ──────────────────────────────────────────────────
-
-async function checkAuth() {
-  try {
-    const data = await api('GET', '/api/auth/me');
-    if (!data.userId) throw new Error('Not authenticated');
-    state.user = { id: data.userId };
-    const pd = await api('GET', '/api/profile');
-    state.user = pd.user || state.user;
-    state.profile = pd.profile;
-    if (!state.profile || !state.profile.onboarding_complete) {
-      initOnboarding();
-      showScreen('onboarding');
-    } else {
-      await loadDashboard();
-      showScreen('dashboard');
-    }
-  } catch {
-    showScreen('auth');
-  }
-}
-
-function initAuthListeners() {
-  // Tab switching
-  document.querySelectorAll('.auth-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.auth-form-panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(`panel-${tab.dataset.tab}`).classList.add('active');
+  // ------- API helpers -------
+  async function api(path, opts) {
+    opts = opts || {};
+    const res = await fetch(path, {
+      credentials: 'include',
+      headers: Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json' }, opts.headers || {}),
+      cache: 'no-store',
+      method: opts.method,
+      body: opts.body
     });
-  });
+    let body = null;
+    try { body = await res.json(); } catch (_) {}
+    if (!res.ok) {
+      const err = new Error((body && body.error) || ('HTTP ' + res.status));
+      err.status = res.status; err.body = body;
+      throw err;
+    }
+    return body || {};
+  }
+  const apiGet   = (p)    => api(p);
+  const apiPost  = (p, b) => api(p, { method:'POST',  body: JSON.stringify(b || {}) });
+  const apiPut   = (p, b) => api(p, { method:'PUT',   body: JSON.stringify(b || {}) });
+  const apiPatch = (p, b) => api(p, { method:'PATCH', body: JSON.stringify(b || {}) });
+  const apiDel   = (p)    => api(p, { method:'DELETE' });
 
-  document.getElementById('btn-signup').addEventListener('click', async () => {
-    const btn = document.getElementById('btn-signup');
-    const errEl = document.getElementById('signup-error');
-    const email = document.getElementById('signup-email').value.trim();
-    const password = document.getElementById('signup-password').value;
-    errEl.style.display = 'none';
-    btn.disabled = true;
-    try {
-      const data = await api('POST', '/api/auth/signup', { email, password });
-      state.user = data.user;
-      initOnboarding();
-      showScreen('onboarding');
-    } catch (e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
-    } finally { btn.disabled = false; }
-  });
+  // ------- Icons (inline SVG) -------
+  const I = {
+    home:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
+    cal:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+    cart:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path d="M3 3h2l2.4 12.2a2 2 0 0 0 2 1.6h7.6a2 2 0 0 0 2-1.5L21 8H6"/></svg>',
+    bell:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0v5l1.5 3h-15L6 13z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>',
+    gear:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.21 16.96l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9.07a1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.36l.06.06A1.65 1.65 0 0 0 8.92 4.75 1.65 1.65 0 0 0 9.93 3.24V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    plus:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+    edit:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4 10-10"/></svg>',
+    spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/></svg>',
+    refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>',
+    yoga:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v5l-4 3 3 6"/><path d="M12 12l4 3-3 6"/><path d="M5 13h14"/></svg>',
+    fork:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v8a2 2 0 1 1-4 0V2M5 10v12"/><path d="M17 2c-2 0-3 2-3 5s1 5 3 5v10"/></svg>'
+  };
 
-  document.getElementById('btn-signin').addEventListener('click', async () => {
-    const btn = document.getElementById('btn-signin');
-    const errEl = document.getElementById('signin-error');
-    const email = document.getElementById('signin-email').value.trim();
-    const password = document.getElementById('signin-password').value;
-    errEl.style.display = 'none';
-    btn.disabled = true;
-    try {
-      const data = await api('POST', '/api/auth/signin', { email, password });
-      state.user = data.user;
-      const pd = await api('GET', '/api/profile');
-      state.profile = pd.profile;
-      if (!state.profile || !state.profile.onboarding_complete) {
-        initOnboarding(); showScreen('onboarding');
-      } else {
-        await loadDashboard(); showScreen('dashboard');
+  // ------- View helpers -------
+  function escapeHTML(s) {
+    return String(s == null ? '' : s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function setApp(html) { document.getElementById('app').innerHTML = html; }
+  function weekDates() {
+    const now = new Date();
+    const day = now.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(now);
+    monday.setHours(0,0,0,0);
+    monday.setDate(now.getDate() + mondayOffset);
+    const out = {};
+    ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach((k, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      out[k] = d;
+    });
+    return out;
+  }
+  function todayKey() { return DAYS[new Date().getDay()]; }
+  function greeting() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 18) return 'Good afternoon';
+    return 'Good evening';
+  }
+  function toast(msg) {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const t = document.createElement('div');
+    t.className = 'toast show';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 200); }, 1800);
+  }
+
+  // ------- Renderers -------
+  function renderTabbar() {
+    function tab(id, icon, label) {
+      const active = State.tab === id;
+      return '<button class="tab ' + (active?'active':'') + '" data-action="tab" data-tab="' + id + '">' + icon + '<span>' + label + '</span></button>';
+    }
+    return '<nav class="tabbar">' +
+      tab('today', I.home, 'Today') +
+      tab('plan', I.cal, 'Plan') +
+      tab('shopping', I.cart, 'Shopping') +
+      tab('schedule', I.bell, 'Schedule') +
+      tab('settings', I.gear, 'Settings') +
+    '</nav>';
+  }
+
+  function renderTopbar(title) {
+    const dayName = new Date().toLocaleDateString('en-AU', { weekday: 'long' });
+    return '<div class="topbar"><div class="topbar-inner"><h1>' + escapeHTML(title) + '</h1><div class="pill">' + dayName + '</div></div></div>';
+  }
+
+  function renderHero() {
+    const d = new Date();
+    const dayName = d.toLocaleDateString('en-AU', { weekday: 'long' });
+    const dateStr = d.toLocaleDateString('en-AU', { day: 'numeric', month: 'long' });
+    const sub = (State.plan && State.plan.subtitle) ? State.plan.subtitle : 'Couples plan · Cut + Gain';
+    return '<div class="hero">' +
+      '<h2>' + greeting() + '</h2>' +
+      '<div class="date">' + escapeHTML(dayName) + '</div>' +
+      '<div class="sub">' + escapeHTML(dateStr) + ' · ' + escapeHTML(sub) + '</div>' +
+    '</div>';
+  }
+
+  function isPilatesToday() {
+    const dow = new Date().getDay();
+    return (State.schedule.events || []).find(e =>
+      e.kind === 'pilates' && e.enabled && Array.isArray(e.days_of_week) && e.days_of_week.indexOf(dow) !== -1
+    ) || null;
+  }
+
+  function sortMeals(meals) {
+    return (meals || []).slice().sort((a, b) => (MEAL_ORDER[a.type] != null ? MEAL_ORDER[a.type] : 99) - (MEAL_ORDER[b.type] != null ? MEAL_ORDER[b.type] : 99));
+  }
+
+  function renderMealCard(m, dayKey) {
+    const her = (m.her || []);
+    const him = (m.him || []);
+    const hList = her.length ? her.map(s => '<li>' + escapeHTML(s) + '</li>').join('') : '<li class="empty">—</li>';
+    const mList = him.length ? him.map(s => '<li>' + escapeHTML(s) + '</li>').join('') : '<li class="empty">—</li>';
+    return '<div class="meal-card">' +
+      '<div class="meal-head">' +
+        '<div>' +
+          '<div class="meal-type">' + escapeHTML(MEAL_LABELS[m.type] || m.type) + '</div>' +
+          '<div class="meal-name">' + escapeHTML(m.name) + '</div>' +
+        '</div>' +
+        '<button class="icon-btn" data-action="edit-meal" data-day="' + escapeHTML(dayKey) + '" data-type="' + escapeHTML(m.type) + '" aria-label="Edit">' + I.edit + '</button>' +
+      '</div>' +
+      '<div class="portions">' +
+        '<div class="portion her"><div class="who">Her</div><ul>' + hList + '</ul></div>' +
+        '<div class="portion him"><div class="who">Him</div><ul>' + mList + '</ul></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderToday() {
+    if (!State.plan) return renderTopbar('Hank') + '<div class="page"><div class="empty">No plan yet.</div></div>';
+    const tk = todayKey();
+    const day = (State.plan.days || []).find(d => d.day === tk);
+    const pilates = isPilatesToday();
+    const meals = sortMeals(day && day.meals);
+    return renderTopbar('Hank') +
+      renderHero() +
+      (pilates ? (
+        '<div class="pilates-banner">' +
+          '<div class="icon-wrap">' + I.yoga + '</div>' +
+          '<div class="body">' +
+            '<div class="title">Pilates today at ' + escapeHTML(pilates.time_local) + '</div>' +
+            '<div class="sub">' + escapeHTML(pilates.message || 'Get your mat ready') + '</div>' +
+          '</div>' +
+        '</div>'
+      ) : '') +
+      '<div class="page">' +
+        (meals.length ? meals.map(m => renderMealCard(m, tk)).join('') : '<div class="empty">No meals for today.</div>') +
+      '</div>';
+  }
+
+  function renderPlan() {
+    if (!State.plan) return renderTopbar('Plan') + '<div class="page"><div class="empty">No plan loaded.</div></div>';
+    const tk = todayKey();
+    const sel = State.selectedDay || tk;
+    const day = (State.plan.days || []).find(d => d.day === sel) || (State.plan.days || [])[0];
+    const dates = weekDates();
+    const order = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+    const chips = order.map(k => {
+      const isToday = k === tk;
+      const active = k === sel;
+      return '<button class="day-chip ' + (active?'active':'') + ' ' + (isToday?'today':'') + '" data-action="select-day" data-day="' + k + '">' +
+        '<div class="d">' + DAY_LABELS[k] + '</div>' +
+        '<div class="n">' + (dates[k] ? dates[k].getDate() : '') + '</div>' +
+      '</button>';
+    }).join('');
+    const meals = sortMeals(day && day.meals);
+    return renderTopbar('Plan') +
+      '<div class="page">' +
+        '<div class="day-chips">' + chips + '</div>' +
+        (meals.length ? meals.map(m => renderMealCard(m, day.day)).join('') : '<div class="empty">No meals for this day.</div>') +
+        '<div class="card">' +
+          '<div class="bold">Plan next week</div>' +
+          '<div class="small muted" style="margin-top:2px">Duplicate this week or generate fresh meals.</div>' +
+          '<div class="btn-row" style="margin-top:12px">' +
+            '<button class="btn btn-secondary" data-action="next-week" data-mode="duplicate">' + I.refresh + '<span>Duplicate</span></button>' +
+            '<button class="btn btn-primary" data-action="next-week" data-mode="surprise">' + I.spark + '<span>Surprise me</span></button>' +
+          '</div>' +
+        '</div>' +
+        (State.plan.notes ? '<div class="notes">' + escapeHTML(State.plan.notes) + '</div>' : '') +
+      '</div>';
+  }
+
+  function renderShopping() {
+    const items = State.shopping.items || [];
+    const total = items.length;
+    const done = items.filter(i => i.checked).length;
+    const byCat = {};
+    const order = [];
+    items.forEach(it => {
+      const c = it.category || 'Other';
+      if (!byCat[c]) { byCat[c] = []; order.push(c); }
+      byCat[c].push(it);
+    });
+    const groups = order.map(c => {
+      const rows = byCat[c].map(it => {
+        return '<div class="shop-item ' + (it.checked?'checked':'') + '" data-action="toggle-shop" data-id="' + it.id + '">' +
+          '<div class="checkbox">' + I.check + '</div>' +
+          '<div class="body">' +
+            '<div class="name">' + escapeHTML(it.name) + '</div>' +
+            (it.qty ? '<div class="qty">' + escapeHTML(it.qty) + '</div>' : '') +
+          '</div>' +
+          '<button class="del icon-btn ghost" data-action="delete-shop" data-id="' + it.id + '" aria-label="Delete">' + I.trash + '</button>' +
+        '</div>';
+      }).join('');
+      return '<div class="shop-category">' + escapeHTML(c) + '</div>' + rows;
+    }).join('');
+
+    return renderTopbar('Shopping') +
+      '<div class="page">' +
+        '<div class="row between" style="margin: 2px 4px 12px">' +
+          '<div class="bold">Your list <span class="shop-counter">' + done + '/' + total + ' done</span></div>' +
+          '<div class="row gap-6">' +
+            '<button class="icon-btn" data-action="regen-shopping" title="Regenerate from plan" aria-label="Regenerate">' + I.refresh + '</button>' +
+            '<button class="icon-btn" data-action="clear-checked" title="Clear ticked" aria-label="Clear checked">' + I.trash + '</button>' +
+          '</div>' +
+        '</div>' +
+        '<form class="add-row" data-action="add-shop-item">' +
+          '<input type="text" name="name" placeholder="Add item" autocomplete="off" />' +
+          '<input type="text" name="qty" placeholder="qty" class="qty" autocomplete="off" />' +
+          '<button type="submit" class="icon-btn primary" aria-label="Add">' + I.plus + '</button>' +
+        '</form>' +
+        (total === 0 ? '<div class="empty">List is empty. Tap the refresh icon to pull from your meal plan.</div>' : groups) +
+      '</div>';
+  }
+
+  function renderEventRow(ev) {
+    const days = Array.isArray(ev.days_of_week) ? ev.days_of_week : [];
+    const toggles = DOW_ORDER.map(d => '<button class="day-toggle ' + (days.indexOf(d) !== -1 ? 'on':'') + '" data-action="event-day" data-id="' + ev.id + '" data-d="' + d + '">' + DOW_INITIAL[d] + '</button>').join('');
+    return '<div class="sched-row" data-event="' + ev.id + '">' +
+      '<div class="sched-head">' +
+        '<div class="sched-label">' + escapeHTML(ev.label) + '</div>' +
+        '<div class="sched-meta">' +
+          '<input type="time" class="sched-time-input" value="' + escapeHTML(ev.time_local) + '" data-action="event-time" data-id="' + ev.id + '" />' +
+          '<button class="switch ' + (ev.enabled?'on':'') + '" data-action="toggle-event" data-id="' + ev.id + '" aria-label="Toggle"></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="day-toggles">' + toggles + '</div>' +
+      '<div class="sched-actions">' +
+        '<button class="link-btn" data-action="rename-event" data-id="' + ev.id + '">Rename</button>' +
+        '<button class="link-btn danger" data-action="delete-event" data-id="' + ev.id + '">Delete</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderSchedule() {
+    const events = State.schedule.events || [];
+    const tz = State.schedule.timezone || 'Australia/Brisbane';
+    const pilates = events.filter(e => e.kind === 'pilates');
+    const meals   = events.filter(e => e.kind === 'meal');
+    const custom  = events.filter(e => e.kind !== 'pilates' && e.kind !== 'meal');
+    return renderTopbar('Schedule') +
+      '<div class="page">' +
+        '<div class="card">' +
+          '<div class="row between"><div><div class="bold">Timezone</div><div class="small muted">' + escapeHTML(tz) + '</div></div>' +
+          '<button class="btn btn-secondary" data-action="edit-timezone">Change</button></div>' +
+        '</div>' +
+        '<div class="section-title">Pilates</div>' +
+        (pilates.length ? pilates.map(renderEventRow).join('') : '<div class="empty">No pilates reminders.</div>') +
+        '<div class="section-title">Meal reminders</div>' +
+        (meals.length ? meals.map(renderEventRow).join('') : '<div class="empty">No meal reminders.</div>') +
+        (custom.length ? '<div class="section-title">Other</div>' + custom.map(renderEventRow).join('') : '') +
+        '<button class="btn btn-secondary btn-block mt-12" data-action="add-event">' + I.plus + '<span>Add reminder</span></button>' +
+      '</div>';
+  }
+
+  function renderSettings() {
+    const pushOn = State.pushSubscribed;
+    const vapidOk = Boolean(State.vapidKey);
+    return renderTopbar('Settings') +
+      '<div class="page">' +
+        '<div class="card">' +
+          '<div class="bold">Account</div>' +
+          '<div class="kv"><div class="k">User</div><div class="v">#' + escapeHTML(String(State.user && State.user.id)) + '</div></div>' +
+          '<button class="btn btn-ghost btn-block mt-12" data-action="signout">Sign out</button>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="bold">Push notifications</div>' +
+          '<div class="kv"><div class="k">Status</div><div class="v">' + (pushOn ? 'Enabled on this device' : 'Disabled') + '</div></div>' +
+          (vapidOk
+            ? (pushOn
+                ? ('<div class="btn-row mt-12">' +
+                    '<button class="btn btn-secondary" data-action="push-test">Send test</button>' +
+                    '<button class="btn btn-danger" data-action="push-off">Disable</button>' +
+                  '</div>')
+                : '<button class="btn btn-primary btn-block mt-12" data-action="push-on">' + I.bell + '<span>Enable on this device</span></button>')
+            : '<div class="small muted mt-12">Server VAPID keys not configured. Run <code>npx web-push generate-vapid-keys</code> and set <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code>.</div>') +
+          '<div class="small muted mt-12">iOS tip: add the app to your home screen first, then enable.</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="bold">Timezone</div>' +
+          '<div class="kv"><div class="k">Current</div><div class="v">' + escapeHTML(State.schedule.timezone || '') + '</div></div>' +
+          '<button class="btn btn-secondary btn-block mt-12" data-action="edit-timezone">Change timezone</button>' +
+        '</div>' +
+        '<div class="small muted" style="text-align:center;padding:8px">Hank · v1.0</div>' +
+      '</div>';
+  }
+
+  function renderAuth() {
+    const mode = State.authMode;
+    const err = State.authError;
+    setApp(
+      '<div class="auth-wrap">' +
+        '<div class="auth-logo">' + I.fork + '</div>' +
+        '<h1 class="auth-title">Hank</h1>' +
+        '<p class="auth-sub">Couples meal plan, shopping list and reminders.</p>' +
+        '<div class="auth-tabs">' +
+          '<button class="at ' + (mode==='signin'?'active':'') + '" data-action="auth-mode" data-mode="signin">Sign in</button>' +
+          '<button class="at ' + (mode==='signup'?'active':'') + '" data-action="auth-mode" data-mode="signup">Create account</button>' +
+        '</div>' +
+        '<form class="auth-form" data-action="auth-submit">' +
+          (err ? '<div class="auth-error">' + escapeHTML(err) + '</div>' : '') +
+          '<div class="field"><label>Email</label><input type="email" name="email" autocomplete="email" required /></div>' +
+          '<div class="field"><label>Password</label><input type="password" name="password" autocomplete="' + (mode==='signin'?'current-password':'new-password') + '" required minlength="8" /></div>' +
+          '<button class="btn btn-primary btn-block" type="submit">' + (mode==='signin'?'Sign in':'Create account') + '</button>' +
+        '</form>' +
+        '<div class="auth-help">Use one shared account for the household.</div>' +
+      '</div>'
+    );
+  }
+
+  function render() {
+    let body = '';
+    switch (State.tab) {
+      case 'today':    body = renderToday(); break;
+      case 'plan':     body = renderPlan(); break;
+      case 'shopping': body = renderShopping(); break;
+      case 'schedule': body = renderSchedule(); break;
+      case 'settings': body = renderSettings(); break;
+      default:         body = renderToday();
+    }
+    setApp('<div class="app">' + body + renderTabbar() + '</div>');
+  }
+
+  // ------- Modal -------
+  function showModal(html, opts) {
+    hideModal();
+    const center = opts && opts.center;
+    const m = document.createElement('div');
+    m.className = 'modal' + (center ? ' center' : '');
+    m.innerHTML = '<div class="modal-card">' + (center ? '' : '<div class="modal-drag"></div>') + html + '</div>';
+    m.addEventListener('click', (e) => { if (e.target === m) hideModal(); });
+    document.body.appendChild(m);
+    const firstInput = m.querySelector('input, textarea, select');
+    if (firstInput && !center) setTimeout(() => firstInput.focus(), 100);
+  }
+  function hideModal() {
+    const cur = document.querySelector('.modal');
+    if (cur) cur.remove();
+  }
+
+  function showEditMealModal(day, type) {
+    const dayObj = (State.plan.days || []).find(d => d.day === day);
+    const meal = dayObj && dayObj.meals.find(m => m.type === type);
+    if (!meal) return;
+    const her = (meal.her || []).join('\n');
+    const him = (meal.him || []).join('\n');
+    showModal(
+      '<h3>Edit ' + escapeHTML(MEAL_LABELS[type] || type) + ' · ' + escapeHTML(DAY_FULL[day] || day) + '</h3>' +
+      '<form data-action="save-meal" data-day="' + day + '" data-type="' + type + '">' +
+        '<div class="field"><label>Meal name</label><input type="text" name="name" value="' + escapeHTML(meal.name) + '" required /></div>' +
+        '<div class="field"><label>Her portion (one item per line)</label><textarea name="her">' + escapeHTML(her) + '</textarea></div>' +
+        '<div class="field"><label>His portion (one item per line)</label><textarea name="him">' + escapeHTML(him) + '</textarea></div>' +
+        '<div class="modal-actions">' +
+          '<button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button>' +
+          '<button type="submit" class="btn btn-primary">Save</button>' +
+        '</div>' +
+      '</form>'
+    );
+  }
+
+  function showAddEventModal() {
+    const toggles = DOW_ORDER.map(d => '<button type="button" class="day-toggle on" data-action="newday-toggle" data-d="' + d + '">' + DOW_INITIAL[d] + '</button>').join('');
+    showModal(
+      '<h3>Add reminder</h3>' +
+      '<form data-action="create-event">' +
+        '<div class="field"><label>Type</label><select name="kind"><option value="custom">Other</option><option value="meal">Meal</option><option value="pilates">Pilates</option></select></div>' +
+        '<div class="field"><label>Label</label><input type="text" name="label" required placeholder="e.g. Water reminder" /></div>' +
+        '<div class="field"><label>Time</label><input type="time" name="timeLocal" value="08:00" required /></div>' +
+        '<div class="field"><label>Days</label><div class="day-toggles">' + toggles + '</div></div>' +
+        '<div class="field"><label>Message (optional)</label><input type="text" name="message" placeholder="Shown in the notification" /></div>' +
+        '<div class="modal-actions">' +
+          '<button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button>' +
+          '<button type="submit" class="btn btn-primary">Add</button>' +
+        '</div>' +
+      '</form>'
+    );
+  }
+
+  function showRenameEventModal(id) {
+    const ev = State.schedule.events.find(e => e.id === id);
+    if (!ev) return;
+    showModal(
+      '<h3>Edit reminder</h3>' +
+      '<form data-action="rename-save" data-id="' + id + '">' +
+        '<div class="field"><label>Label</label><input type="text" name="label" value="' + escapeHTML(ev.label) + '" required /></div>' +
+        '<div class="field"><label>Message</label><input type="text" name="message" value="' + escapeHTML(ev.message || '') + '" /></div>' +
+        '<div class="modal-actions">' +
+          '<button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button>' +
+          '<button type="submit" class="btn btn-primary">Save</button>' +
+        '</div>' +
+      '</form>'
+    );
+  }
+
+  function showTimezoneModal() {
+    const cur = State.schedule.timezone || 'Australia/Brisbane';
+    const opts = ['Australia/Brisbane','Australia/Sydney','Australia/Melbourne','Australia/Adelaide','Australia/Perth','Australia/Darwin','Australia/Hobart','Pacific/Auckland','UTC'];
+    showModal(
+      '<h3>Set timezone</h3>' +
+      '<form data-action="save-timezone">' +
+        '<div class="field"><label>Timezone</label><select name="tz">' + opts.map(o => '<option ' + (o===cur?'selected':'') + '>' + o + '</option>').join('') + '</select></div>' +
+        '<div class="modal-actions">' +
+          '<button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button>' +
+          '<button type="submit" class="btn btn-primary">Save</button>' +
+        '</div>' +
+      '</form>'
+    );
+  }
+
+  // ------- Actions -------
+  const Actions = {
+    'tab': (el) => { State.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
+    'select-day': (el) => { State.selectedDay = el.dataset.day; render(); },
+    'edit-meal': (el) => showEditMealModal(el.dataset.day, el.dataset.type),
+    'close-modal': () => hideModal(),
+
+    'save-meal': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const fd = new FormData(form);
+      const day = form.dataset.day;
+      const type = form.dataset.type;
+      const name = String(fd.get('name') || '').trim();
+      const her = String(fd.get('her') || '').split('\n').map(s => s.trim()).filter(Boolean);
+      const him = String(fd.get('him') || '').split('\n').map(s => s.trim()).filter(Boolean);
+      try {
+        const out = await apiPut('/api/couples-plan/meal', { day, type, name, her, him });
+        State.plan = out.plan;
+        hideModal();
+        toast('Saved');
+        render();
+      } catch (err) { toast(err.message || 'Save failed'); }
+    },
+
+    'next-week': async (el) => {
+      const mode = el.dataset.mode;
+      toast(mode === 'surprise' ? 'Generating fresh meals…' : 'Duplicating this week…');
+      try {
+        const out = await apiPost('/api/couples-plan/next-week', { mode });
+        State.plan = out.plan;
+        State.planId = out.planId;
+        State.planSource = out.source;
+        toast(mode === 'surprise' ? 'Fresh plan ready' : 'Next week ready');
+        try {
+          const sh = await apiPost('/api/shopping/regenerate', {});
+          State.shopping = sh;
+        } catch (_) {}
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+
+    'toggle-shop': async (el) => {
+      const id = Number(el.dataset.id);
+      const item = State.shopping.items.find(i => i.id === id);
+      if (!item) return;
+      const next = !item.checked;
+      item.checked = next;
+      render();
+      try { await apiPatch('/api/shopping/items/' + id, { checked: next }); }
+      catch (err) { item.checked = !next; render(); toast(err.message || 'Failed'); }
+    },
+    'add-shop-item': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const fd = new FormData(form);
+      const name = String(fd.get('name') || '').trim();
+      const qty = String(fd.get('qty') || '').trim();
+      if (!name) return;
+      try {
+        const out = await apiPost('/api/shopping/items', { name, qty });
+        State.shopping.items.push(out.item);
+        form.reset();
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'delete-shop': async (el, e) => {
+      e && e.stopPropagation();
+      const id = Number(el.dataset.id);
+      try {
+        await apiDel('/api/shopping/items/' + id);
+        State.shopping.items = State.shopping.items.filter(i => i.id !== id);
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'regen-shopping': async () => {
+      if (!confirm('Replace the auto-generated items from your meal plan? (Manual items stay.)')) return;
+      try {
+        const out = await apiPost('/api/shopping/regenerate', {});
+        State.shopping = out;
+        toast('Shopping list refreshed');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'clear-checked': async () => {
+      if (!confirm('Remove all ticked items?')) return;
+      try {
+        const out = await apiPost('/api/shopping/clear-checked', {});
+        State.shopping = out;
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+
+    'add-event': () => showAddEventModal(),
+    'newday-toggle': (el, e) => { e && e.preventDefault(); el.classList.toggle('on'); },
+    'create-event': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const fd = new FormData(form);
+      const kind = String(fd.get('kind') || 'custom');
+      const label = String(fd.get('label') || '').trim();
+      const timeLocal = String(fd.get('timeLocal') || '');
+      const message = String(fd.get('message') || '').trim() || null;
+      const daysOfWeek = Array.from(form.querySelectorAll('.day-toggle.on')).map(b => Number(b.dataset.d));
+      try {
+        const out = await apiPost('/api/schedule', { kind, label, timeLocal, daysOfWeek, message });
+        State.schedule.events.push(out.event);
+        hideModal();
+        toast('Reminder added');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'event-time': async (el) => {
+      const id = Number(el.dataset.id);
+      const ev = State.schedule.events.find(x => x.id === id);
+      if (!ev) return;
+      const newTime = el.value;
+      const prev = ev.time_local;
+      try {
+        const out = await apiPatch('/api/schedule/' + id, { timeLocal: newTime });
+        Object.assign(ev, out.event);
+        toast('Time updated');
+      } catch (err) { el.value = prev; toast(err.message || 'Failed'); }
+    },
+    'event-day': async (el) => {
+      const id = Number(el.dataset.id);
+      const d = Number(el.dataset.d);
+      const ev = State.schedule.events.find(x => x.id === id);
+      if (!ev) return;
+      const set = new Set(ev.days_of_week || []);
+      if (set.has(d)) set.delete(d); else set.add(d);
+      const daysOfWeek = Array.from(set).sort((a, b) => a - b);
+      el.classList.toggle('on');
+      try {
+        const out = await apiPatch('/api/schedule/' + id, { daysOfWeek });
+        Object.assign(ev, out.event);
+      } catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
+    },
+    'toggle-event': async (el) => {
+      const id = Number(el.dataset.id);
+      const ev = State.schedule.events.find(x => x.id === id);
+      if (!ev) return;
+      const next = !ev.enabled;
+      el.classList.toggle('on');
+      try {
+        const out = await apiPatch('/api/schedule/' + id, { enabled: next });
+        Object.assign(ev, out.event);
+      } catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
+    },
+    'rename-event': (el) => showRenameEventModal(Number(el.dataset.id)),
+    'rename-save': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const id = Number(form.dataset.id);
+      const fd = new FormData(form);
+      const label = String(fd.get('label') || '').trim();
+      const message = String(fd.get('message') || '').trim() || null;
+      try {
+        const out = await apiPatch('/api/schedule/' + id, { label, message });
+        const ev = State.schedule.events.find(x => x.id === id);
+        if (ev) Object.assign(ev, out.event);
+        hideModal();
+        toast('Saved');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'delete-event': async (el) => {
+      const id = Number(el.dataset.id);
+      if (!confirm('Delete this reminder?')) return;
+      try {
+        await apiDel('/api/schedule/' + id);
+        State.schedule.events = State.schedule.events.filter(x => x.id !== id);
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'edit-timezone': () => showTimezoneModal(),
+    'save-timezone': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const tz = String(new FormData(form).get('tz') || '');
+      try {
+        await apiPut('/api/schedule/timezone', { timezone: tz });
+        State.schedule.timezone = tz;
+        hideModal();
+        toast('Timezone updated');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+
+    'push-on': async () => {
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Push not supported on this device'); return; }
+        if (!State.vapidKey) { toast('Server not configured for push'); return; }
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { toast('Notification permission denied'); return; }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(State.vapidKey)
+        });
+        await apiPost('/api/push/subscribe', sub.toJSON());
+        State.pushSubscribed = true;
+        toast('Notifications enabled');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'push-off': async () => {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await apiPost('/api/push/unsubscribe', { endpoint: sub.endpoint });
+          await sub.unsubscribe();
+        }
+        State.pushSubscribed = false;
+        toast('Notifications disabled');
+        render();
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'push-test': async () => {
+      try { await apiPost('/api/push/test', {}); toast('Test sent'); }
+      catch (err) { toast(err.message || 'Failed'); }
+    },
+
+    'signout': async () => {
+      try { await apiPost('/api/auth/signout', {}); } catch (_) {}
+      State.user = null;
+      State.plan = null;
+      State.shopping = { list: null, items: [] };
+      State.schedule = { events: [], timezone: 'Australia/Brisbane' };
+      renderAuth();
+    },
+    'auth-mode': (el) => { State.authMode = el.dataset.mode; State.authError = ''; renderAuth(); },
+    'auth-submit': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const fd = new FormData(form);
+      const email = String(fd.get('email') || '').trim();
+      const password = String(fd.get('password') || '');
+      try {
+        const out = await apiPost(State.authMode === 'signin' ? '/api/auth/signin' : '/api/auth/signup', { email, password });
+        State.user = out.user || null;
+        State.authError = '';
+        await loadAll();
+        State.tab = 'today';
+        render();
+      } catch (err) {
+        State.authError = err.message || 'Failed';
+        renderAuth();
       }
-    } catch (e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
-    } finally { btn.disabled = false; }
-  });
-
-  // Enter key on inputs
-  ['signin-email', 'signin-password'].forEach(id => {
-    document.getElementById(id).addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('btn-signin').click();
-    });
-  });
-}
-
-// ── Onboarding ────────────────────────────────────────────
-
-function initOnboarding() {
-  state.ob = { goal: '', step: 1, totalSteps: 5 };
-  renderObProgress();
-  gotoObStep(1);
-
-  // Option cards (goal selection)
-  document.querySelectorAll('.option-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const field = card.dataset.field;
-      document.querySelectorAll(`[data-field="${field}"]`).forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-      state.ob[field] = card.dataset.val;
-    });
-  });
-
-  document.getElementById('ob-next').addEventListener('click', handleObNext);
-  document.getElementById('ob-back').addEventListener('click', () => {
-    if (state.ob.step > 1) { state.ob.step--; gotoObStep(state.ob.step); }
-  });
-}
-
-function gotoObStep(step) {
-  document.querySelectorAll('.onboarding-step').forEach(s => s.classList.remove('active'));
-  const el = document.querySelector(`[data-step="${step}"]`);
-  if (el) el.classList.add('active');
-  document.getElementById('ob-back').style.visibility = step === 1 ? 'hidden' : '';
-  const nextBtn = document.getElementById('ob-next');
-  nextBtn.textContent = step === state.ob.totalSteps ? 'Get My Plan →' : 'Continue';
-  renderObProgress();
-}
-
-function renderObProgress() {
-  const el = document.getElementById('ob-progress');
-  el.innerHTML = '';
-  for (let i = 1; i <= state.ob.totalSteps; i++) {
-    const bar = document.createElement('div');
-    bar.className = `onboarding-progress-bar${i <= state.ob.step ? ' done' : ''}`;
-    el.appendChild(bar);
-  }
-}
-
-async function handleObNext() {
-  const step = state.ob.step;
-  if (step < state.ob.totalSteps) {
-    state.ob.step++;
-    gotoObStep(state.ob.step);
-    return;
-  }
-  // Final step — submit
-  const btn = document.getElementById('ob-next');
-  btn.disabled = true;
-  btn.textContent = 'Saving...';
-  try {
-    const payload = {
-      fullName:          document.getElementById('ob-name').value.trim(),
-      age:               Number(document.getElementById('ob-age').value),
-      sex:               document.getElementById('ob-sex').value,
-      weightKg:          Number(document.getElementById('ob-weight').value),
-      heightCm:          Number(document.getElementById('ob-height').value),
-      goal:              state.ob.goal || 'maintenance',
-      activityLevel:     document.getElementById('ob-activity').value,
-      workoutDays:       Number(document.getElementById('ob-days').value),
-      gymAccess:         document.getElementById('ob-gym').value,
-      workoutPreference: document.getElementById('ob-split').value,
-      dietType:          document.getElementById('ob-diet').value,
-      mealsPerDay:       Number(document.getElementById('ob-meals').value),
-      cookingPreference: document.getElementById('ob-cooking').value,
-      allergies:         document.getElementById('ob-allergies').value.trim(),
-      dislikes:          document.getElementById('ob-dislikes').value.trim(),
-      injuries:          document.getElementById('ob-injuries').value.trim(),
-      waterGoalMl:       Number(document.getElementById('ob-water').value) || 2500,
-      onboardingComplete: true
-    };
-    const pd = await api('POST', '/api/profile/onboarding', payload);
-    state.profile = pd.profile;
-    toast('Profile saved! Generating your plan...', 'success');
-    // Generate plans in background
-    Promise.all([
-      api('POST', '/api/plans/meal').then(d => { state.mealPlan = d.plan; }).catch(() => {}),
-      api('POST', '/api/plans/workout').then(d => { state.workoutPlan = d.plan; }).catch(() => {})
-    ]).then(() => toast('Your plans are ready!', 'success'));
-    await loadDashboard();
-    showScreen('dashboard');
-  } catch (e) {
-    toast(e.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Get My Plan →';
-  }
-}
-
-// ── Dashboard ──────────────────────────────────────────────
-
-async function loadDashboard() {
-  const hour = new Date().getHours();
-  const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const name = state.profile?.full_name?.split(' ')[0] || '';
-  document.getElementById('greeting-text').textContent = `${greet}${name ? ', ' + name : ''}`;
-
-  const goal = (state.profile?.goal || '').replace('_', ' ');
-  document.getElementById('greeting-sub').textContent =
-    goal ? `Goal: ${goal.charAt(0).toUpperCase() + goal.slice(1)}` : 'Complete your profile to get started';
-
-  // Load data in parallel
-  const [mealRes, workoutRes, logsRes] = await Promise.allSettled([
-    state.mealPlan ? Promise.resolve({ plan: state.mealPlan }) : api('GET', '/api/plans/meal').catch(() => null),
-    state.workoutPlan ? Promise.resolve({ plan: state.workoutPlan }) : api('GET', '/api/plans/workout').catch(() => null),
-    api('GET', '/api/tracking/progress?days=1').catch(() => ({ logs: [] }))
-  ]);
-
-  if (mealRes.status === 'fulfilled' && mealRes.value) state.mealPlan = mealRes.value.plan;
-  if (workoutRes.status === 'fulfilled' && workoutRes.value) state.workoutPlan = workoutRes.value.plan;
-
-  renderDashboardStats(logsRes.value?.logs?.[0]);
-  renderDashboardWorkout();
-  renderDashboardMeals();
-}
-
-function renderDashboardStats(todayLog) {
-  const targets = state.mealPlan?.dailyTargets;
-  const calTarget = targets?.calories || 0;
-  const calConsumed = todayLog?.calories_consumed || 0;
-  const water = todayLog?.water_ml || 0;
-  const waterGoal = state.profile?.water_goal_ml || 2500;
-
-  document.getElementById('dashboard-stats').innerHTML = `
-    <div class="stat-card">
-      <div class="stat-label">Calories</div>
-      <div class="stat-val">${calConsumed}<span class="stat-unit"> / ${calTarget}</span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Protein</div>
-      <div class="stat-val">${todayLog?.protein_grams || 0}<span class="stat-unit">g</span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Water</div>
-      <div class="stat-val">${(water / 1000).toFixed(1)}<span class="stat-unit"> / ${(waterGoal / 1000).toFixed(1)}L</span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Steps</div>
-      <div class="stat-val">${(todayLog?.steps || 0).toLocaleString()}</div>
-    </div>
-  `;
-}
-
-function renderDashboardWorkout() {
-  const el = document.getElementById('dashboard-workout');
-  if (!state.workoutPlan?.days?.length) {
-    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔋</div><p>No workout plan yet</p><button class="btn btn-ghost btn-sm" onclick="generateWorkoutPlan()">Generate Plan</button></div>`;
-    return;
-  }
-  const dayIdx = new Date().getDay(); // 0=Sun
-  const planDay = state.workoutPlan.days[dayIdx % state.workoutPlan.days.length];
-  el.innerHTML = `
-    <div class="workout-day-card" onclick="startRunner(${dayIdx % state.workoutPlan.days.length})">
-      <div class="day-focus">${planDay.focus}</div>
-      <div class="day-meta">${planDay.exercises?.length || 0} exercises &middot; ${planDay.dayLabel}</div>
-      <button class="btn btn-accent btn-sm" style="margin-top:10px">Start Workout</button>
-    </div>
-  `;
-}
-
-function renderDashboardMeals() {
-  const el = document.getElementById('dashboard-meals');
-  if (!state.mealPlan?.days?.length) {
-    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🍽️</div><p>No meal plan yet</p><button class="btn btn-ghost btn-sm" onclick="generateMealPlan()">Generate Plan</button></div>`;
-    return;
-  }
-  const dayIdx = new Date().getDay();
-  const today = state.mealPlan.days[dayIdx % state.mealPlan.days.length];
-  el.innerHTML = today.meals.slice(0, 3).map(m => `
-    <div class="meal-card">
-      <div class="meal-type-badge">${m.type}</div>
-      <div class="meal-name">${m.name}</div>
-      <div class="meal-macros">
-        <span><span class="macro-dot dot-p"></span>${m.proteinGrams}g P</span>
-        <span><span class="macro-dot dot-c"></span>${m.carbsGrams}g C</span>
-        <span><span class="macro-dot dot-f"></span>${m.fatsGrams}g F</span>
-        <span>${m.calories} kcal</span>
-      </div>
-    </div>
-  `).join('');
-}
-
-// ── Meals ───────────────────────────────────────────────────
-
-async function loadMealsScreen() {
-  if (!state.mealPlan) {
-    document.getElementById('meals-loading').style.display = 'block';
-    document.getElementById('meals-content').innerHTML = '';
-    document.getElementById('meal-day-tabs').innerHTML = '';
-    try {
-      const d = await api('GET', '/api/plans/meal');
-      state.mealPlan = d.plan;
-    } catch {
-      state.mealPlan = null;
     }
-    document.getElementById('meals-loading').style.display = 'none';
-    if (!state.mealPlan?.days?.length) {
-      document.getElementById('meals-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🍽️</div><p>No meal plan yet. Generate one to get started.</p></div>`;
-      return;
-    }
+  };
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
   }
-  renderMealsScreen(0);
-}
 
-function renderMealsScreen(dayIdx) {
-  const plan = state.mealPlan;
-  if (!plan?.days?.length) return;
-
-  // Day tabs
-  const tabsEl = document.getElementById('meal-day-tabs');
-  tabsEl.innerHTML = plan.days.map((d, i) => `
-    <button class="day-tab${i === dayIdx ? ' active' : ''}" onclick="renderMealsScreen(${i})">${d.day.slice(0, 3)}</button>
-  `).join('');
-
-  const day = plan.days[dayIdx];
-  const targets = plan.dailyTargets;
-
-  document.getElementById('meals-content').innerHTML = `
-    <div class="card">
-      <div class="card-title">Daily Targets</div>
-      <div class="macro-labels"><span>Cals: ${targets?.calories || '–'}</span><span>P: ${targets?.proteinGrams || '–'}g C: ${targets?.carbsGrams || '–'}g F: ${targets?.fatsGrams || '–'}g</span></div>
-    </div>
-    ${day.meals.map(m => `
-      <div class="meal-card">
-        <div class="meal-type-badge">${m.type}</div>
-        <div class="meal-name">${m.name}</div>
-        <div class="meal-macros mb-8">
-          <span><span class="macro-dot dot-p"></span>${m.proteinGrams}g P</span>
-          <span><span class="macro-dot dot-c"></span>${m.carbsGrams}g C</span>
-          <span><span class="macro-dot dot-f"></span>${m.fatsGrams}g F</span>
-          <span>${m.calories} kcal</span>
-        </div>
-        ${m.ingredients?.length ? `<details style="margin-top:6px"><summary style="font-size:0.82rem;color:var(--secondary);cursor:pointer">Ingredients & steps</summary>
-          <ul style="margin:8px 0 0 16px;font-size:0.82rem;color:var(--secondary);line-height:1.8">
-            ${m.ingredients.map(ing => `<li>${ing.amount} ${ing.item}</li>`).join('')}
-          </ul>
-          ${m.instructions?.length ? `<ol style="margin:8px 0 0 16px;font-size:0.82rem;color:var(--secondary);line-height:1.8">${m.instructions.map(s => `<li>${s}</li>`).join('')}</ol>` : ''}
-        </details>` : ''}
-      </div>
-    `).join('')}
-  `;
-}
-
-window.renderMealsScreen = renderMealsScreen;
-
-async function generateMealPlan() {
-  toast('Generating meal plan...');
-  try {
-    const d = await api('POST', '/api/plans/meal');
-    state.mealPlan = d.plan;
-    toast('Meal plan ready!', 'success');
-    renderMealsScreen(0);
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-window.generateMealPlan = generateMealPlan;
-
-// ── Workout plan ────────────────────────────────────────────
-
-async function loadWorkoutScreen() {
-  if (!state.workoutPlan) {
-    document.getElementById('workout-loading').style.display = 'block';
-    try {
-      const d = await api('GET', '/api/plans/workout');
-      state.workoutPlan = d.plan;
-    } catch {
-      state.workoutPlan = null;
-    }
-    document.getElementById('workout-loading').style.display = 'none';
-    if (!state.workoutPlan?.days?.length) {
-      document.getElementById('workout-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🏋️</div><p>No workout plan yet.</p></div>`;
-      return;
-    }
-  }
-  renderWorkoutScreen();
-}
-
-function renderWorkoutScreen() {
-  const plan = state.workoutPlan;
-  if (!plan?.days?.length) return;
-  document.getElementById('workout-content').innerHTML = `
-    <div class="card">
-      <div class="card-title">Program</div>
-      <strong>${plan.programName || 'Workout Program'}</strong>
-      <p class="text-secondary mt-4" style="font-size:0.85rem">${plan.progressionRule || ''}</p>
-    </div>
-    ${plan.days.map((day, i) => `
-      <div class="workout-day-card" onclick="startRunner(${i})">
-        <div class="flex-between">
-          <div>
-            <div class="day-focus">${day.focus}</div>
-            <div class="day-meta">${day.exercises?.length || 0} exercises &middot; ${day.dayLabel}</div>
-          </div>
-          <button class="btn btn-accent btn-sm">Start</button>
-        </div>
-        <div style="margin-top:8px">
-          ${day.exercises?.slice(0, 3).map(e => `<span class="badge badge-muted" style="margin:2px">${e.name}</span>`).join('')}
-          ${(day.exercises?.length || 0) > 3 ? `<span class="text-muted" style="font-size:0.75rem">+${day.exercises.length - 3} more</span>` : ''}
-        </div>
-      </div>
-    `).join('')}
-  `;
-}
-
-async function generateWorkoutPlan() {
-  toast('Generating workout plan...');
-  try {
-    const d = await api('POST', '/api/plans/workout');
-    state.workoutPlan = d.plan;
-    toast('Workout plan ready!', 'success');
-    renderWorkoutScreen();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-window.generateWorkoutPlan = generateWorkoutPlan;
-
-// ── Workout Runner ──────────────────────────────────────────
-
-function startRunner(dayIdx) {
-  if (!state.workoutPlan?.days?.length) return;
-  const r = state.runner;
-  r.active = true;
-  r.day = state.workoutPlan.days[dayIdx];
-  r.planId = null;
-  r.exIdx = 0;
-  r.setIdx = 0;
-  r.loggedSets = [];
-  r.startTime = Date.now();
-  r.weightByEx = {};
-
-  document.getElementById('runner-day-label').textContent = r.day.dayLabel || 'Workout';
-  document.getElementById('rest-screen').classList.remove('active');
-  document.getElementById('screen-runner').classList.add('active');
-
-  // Start elapsed timer
-  clearInterval(r.elapsedInterval);
-  r.elapsedInterval = setInterval(updateElapsed, 1000);
-
-  renderRunnerExercise();
-}
-
-window.startRunner = startRunner;
-
-function renderRunnerExercise() {
-  const r = state.runner;
-  const exercises = r.day?.exercises || [];
-  if (r.exIdx >= exercises.length) { endWorkout(); return; }
-
-  const ex = exercises[r.exIdx];
-  const totalSets = ex.sets || 3;
-
-  if (!r.weightByEx[r.exIdx]) r.weightByEx[r.exIdx] = 60;
-
-  document.getElementById('runner-exercise-name').textContent = ex.name;
-  document.getElementById('runner-set-info').textContent = `Set ${r.setIdx + 1} of ${totalSets} • ${ex.reps} reps • ${ex.restSeconds || 90}s rest`;
-  document.getElementById('runner-weight').value = r.weightByEx[r.exIdx];
-  document.getElementById('runner-progress-text').textContent = `Exercise ${r.exIdx + 1} of ${exercises.length}`;
-}
-
-function updateElapsed() {
-  const r = state.runner;
-  if (!r.startTime) return;
-  const secs = Math.floor((Date.now() - r.startTime) / 1000);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  document.getElementById('runner-elapsed').textContent = `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function completeSet() {
-  const r = state.runner;
-  const exercises = r.day?.exercises || [];
-  const ex = exercises[r.exIdx];
-  if (!ex) return;
-
-  const weight = parseFloat(document.getElementById('runner-weight').value) || 0;
-  r.weightByEx[r.exIdx] = weight;
-
-  r.loggedSets.push({
-    exerciseName: ex.name,
-    setNumber: r.setIdx + 1,
-    reps: ex.reps,
-    weightKg: weight
+  // ------- Event delegation -------
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const a = el.dataset.action;
+    if (a && Actions[a]) Actions[a](el, e);
+  });
+  document.addEventListener('submit', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const a = el.dataset.action;
+    if (a && Actions[a]) { e.preventDefault(); Actions[a](el, e); }
+  });
+  document.addEventListener('change', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    if (el.dataset.action === 'event-time' && Actions['event-time']) Actions['event-time'](el, e);
   });
 
-  const totalSets = ex.sets || 3;
-  r.setIdx++;
-
-  if (r.setIdx >= totalSets) {
-    r.exIdx++;
-    r.setIdx = 0;
-    if (r.exIdx < exercises.length) startRestTimer(ex.restSeconds || 90);
-    else endWorkout();
-  } else {
-    startRestTimer(ex.restSeconds || 90);
-  }
-}
-
-function startRestTimer(seconds) {
-  const r = state.runner;
-  clearInterval(r.restInterval);
-  r.restEndTime = Date.now() + seconds * 1000;
-
-  const screen = document.getElementById('rest-screen');
-  screen.classList.add('active');
-
-  function tick() {
-    const remaining = Math.max(0, Math.ceil((r.restEndTime - Date.now()) / 1000));
-    document.getElementById('rest-countdown').textContent = remaining;
-    if (remaining <= 0) {
-      clearInterval(r.restInterval);
-      screen.classList.remove('active');
-      renderRunnerExercise();
-      if ('vibrate' in navigator) navigator.vibrate([200, 100, 200]);
+  // ------- Boot -------
+  async function loadAll() {
+    const tasks = [
+      apiGet('/api/couples-plan').catch(() => null),
+      apiGet('/api/shopping').catch(() => null),
+      apiGet('/api/schedule').catch(() => null),
+      apiGet('/api/push/vapid').catch(() => ({ publicKey: null }))
+    ];
+    const [plan, shopping, schedule, vapid] = await Promise.all(tasks);
+    if (plan) {
+      State.plan = plan.plan;
+      State.planId = plan.planId;
+      State.planSource = plan.source;
+    }
+    if (shopping) State.shopping = shopping;
+    if (schedule) State.schedule = schedule;
+    if (vapid) State.vapidKey = vapid.publicKey;
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        State.pushSubscribed = Boolean(sub);
+      } catch (_) {}
     }
   }
 
-  tick();
-  r.restInterval = setInterval(tick, 500);
-}
-
-function addRestTime(extra) {
-  state.runner.restEndTime = (state.runner.restEndTime || Date.now()) + extra * 1000;
-}
-
-function skipRest() {
-  clearInterval(state.runner.restInterval);
-  document.getElementById('rest-screen').classList.remove('active');
-  renderRunnerExercise();
-}
-
-function skipExercise() {
-  const r = state.runner;
-  r.exIdx++;
-  r.setIdx = 0;
-  const exercises = r.day?.exercises || [];
-  if (r.exIdx >= exercises.length) endWorkout();
-  else renderRunnerExercise();
-}
-
-async function endWorkout() {
-  const r = state.runner;
-  clearInterval(r.elapsedInterval);
-  clearInterval(r.restInterval);
-  document.getElementById('rest-screen').classList.remove('active');
-
-  const elapsed = Math.floor((Date.now() - (r.startTime || Date.now())) / 1000);
-  const volume = r.loggedSets.reduce((sum, s) => {
-    const repsNum = parseInt(String(s.reps).split('-')[0]) || 8;
-    return sum + repsNum * s.weightKg;
-  }, 0);
-
-  // Show summary modal
-  document.getElementById('summary-stats').innerHTML = `
-    <div class="modal-stat"><span class="modal-stat-label">Duration</span><span class="modal-stat-value">${Math.floor(elapsed / 60)} min</span></div>
-    <div class="modal-stat"><span class="modal-stat-label">Sets completed</span><span class="modal-stat-value">${r.loggedSets.length}</span></div>
-    <div class="modal-stat"><span class="modal-stat-label">Volume lifted</span><span class="modal-stat-value">${Math.round(volume).toLocaleString()} kg</span></div>
-    <div class="modal-stat"><span class="modal-stat-label">Day</span><span class="modal-stat-value">${r.day?.focus || ''}</span></div>
-  `;
-  document.getElementById('modal-summary').classList.add('active');
-
-  // Save session
-  try {
-    await api('POST', '/api/workouts/session', {
-      dayLabel: r.day?.dayLabel,
-      exercises: r.loggedSets,
-      totalTimeSeconds: elapsed,
-      totalVolumeKg: Math.round(volume),
-      completedAt: new Date().toISOString()
-    });
-  } catch { /* ignore */ }
-}
-
-function closeRunner() {
-  document.getElementById('screen-runner').classList.remove('active');
-  document.getElementById('modal-summary').classList.remove('active');
-  state.runner.active = false;
-  showScreen('dashboard');
-  loadDashboard();
-}
-
-// ── Progress ────────────────────────────────────────────────
-
-async function loadProgressScreen() {
-  try {
-    const d = await api('GET', '/api/tracking/progress?days=30');
-    state.progressLogs = d.logs || [];
-  } catch { state.progressLogs = []; }
-  renderCharts();
-}
-
-function renderCharts() {
-  const logs = state.progressLogs;
-  drawLineChart('chart-weight', logs.map(l => l.log_date?.slice(5) || ''), logs.map(l => parseFloat(l.weight_kg) || null), 'kg', '#4ADE80');
-  drawLineChart('chart-calories', logs.slice(-7).map(l => l.log_date?.slice(5) || ''), logs.slice(-7).map(l => l.calories_consumed || 0), 'kcal', '#F97316');
-}
-
-function drawLineChart(canvasId, labels, values, unit, colour) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth || 300;
-  const H = 120;
-  canvas.width = W * window.devicePixelRatio;
-  canvas.height = H * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-  const valid = values.filter(v => v !== null && v > 0);
-  if (!valid.length) {
-    ctx.fillStyle = '#55555F';
-    ctx.font = '13px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText('No data yet', W / 2, H / 2);
-    return;
+  async function boot() {
+    if ('serviceWorker' in navigator) {
+      try { await navigator.serviceWorker.register('/sw.js'); } catch (_) {}
+    }
+    let me;
+    try { me = await apiGet('/api/auth/me'); } catch (_) { me = { userId: null }; }
+    if (!me || !me.userId) { renderAuth(); return; }
+    State.user = { id: me.userId };
+    await loadAll();
+    render();
   }
-
-  const pad = { t: 10, r: 10, b: 24, l: 40 };
-  const cW = W - pad.l - pad.r;
-  const cH = H - pad.t - pad.b;
-  const min = Math.min(...valid) * 0.98;
-  const max = Math.max(...valid) * 1.02;
-  const range = max - min || 1;
-
-  const xStep = cW / Math.max(labels.length - 1, 1);
-  const pts = values.map((v, i) => ({
-    x: pad.l + i * xStep,
-    y: v !== null && v > 0 ? pad.t + cH - ((v - min) / range) * cH : null
-  }));
-
-  // Grid lines
-  ctx.strokeStyle = '#2A2A32';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 3; i++) {
-    const y = pad.t + (cH / 3) * i;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-  }
-
-  // Line
-  ctx.strokeStyle = colour;
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  let started = false;
-  pts.forEach(p => {
-    if (p.y === null) return;
-    if (!started) { ctx.moveTo(p.x, p.y); started = true; }
-    else ctx.lineTo(p.x, p.y);
-  });
-  ctx.stroke();
-
-  // Dots
-  pts.forEach(p => {
-    if (p.y === null) return;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = colour;
-    ctx.fill();
-  });
-
-  // X labels (every nth)
-  ctx.fillStyle = '#55555F';
-  ctx.font = '10px system-ui';
-  ctx.textAlign = 'center';
-  const step = Math.ceil(labels.length / 6);
-  labels.forEach((l, i) => {
-    if (i % step === 0) ctx.fillText(l, pad.l + i * xStep, H - 6);
-  });
-}
-
-async function saveProgressLog() {
-  const payload = {};
-  const w = document.getElementById('log-weight').value;
-  const water = document.getElementById('log-water').value;
-  const steps = document.getElementById('log-steps').value;
-  if (w) payload.weightKg = parseFloat(w);
-  if (water) payload.waterMl = parseInt(water);
-  if (steps) payload.steps = parseInt(steps);
-  if (!Object.keys(payload).length) return toast('Enter at least one value', 'error');
-  try {
-    await api('POST', '/api/tracking/progress', payload);
-    toast('Progress saved!', 'success');
-    document.getElementById('log-weight').value = '';
-    document.getElementById('log-water').value = '';
-    document.getElementById('log-steps').value = '';
-    await loadProgressScreen();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-// ── Settings ───────────────────────────────────────────────
-
-function loadSettingsScreen() {
-  document.getElementById('settings-email').textContent = state.user?.email || '';
-  if (state.profile) {
-    document.getElementById('s-name').value = state.profile.full_name || '';
-    document.getElementById('s-weight').value = state.profile.weight_kg || '';
-    document.getElementById('s-goal').value = state.profile.goal || 'maintenance';
-  }
-}
-
-async function saveSettings() {
-  try {
-    const payload = {
-      fullName: document.getElementById('s-name').value.trim(),
-      weightKg: parseFloat(document.getElementById('s-weight').value) || undefined,
-      goal: document.getElementById('s-goal').value
-    };
-    const d = await api('PUT', '/api/profile', payload);
-    state.profile = d.profile;
-    toast('Settings saved!', 'success');
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function signout() {
-  await api('POST', '/api/auth/signout').catch(() => {});
-  state.user = null; state.profile = null;
-  state.mealPlan = null; state.workoutPlan = null;
-  showScreen('auth');
-}
-
-// ── Navigation wiring ────────────────────────────────────────
-
-function initNavListeners() {
-  document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const name = btn.dataset.nav;
-      showScreen(name);
-      if (name === 'meals') await loadMealsScreen();
-      else if (name === 'workout') await loadWorkoutScreen();
-      else if (name === 'progress') await loadProgressScreen();
-      else if (name === 'settings') loadSettingsScreen();
-      else if (name === 'dashboard') await loadDashboard();
-    });
-  });
-
-  document.getElementById('btn-gen-meals').addEventListener('click', generateMealPlan);
-  document.getElementById('btn-gen-workout').addEventListener('click', generateWorkoutPlan);
-  document.getElementById('btn-finish-set').addEventListener('click', completeSet);
-  document.getElementById('btn-skip-exercise').addEventListener('click', skipExercise);
-  document.getElementById('btn-skip-rest').addEventListener('click', skipRest);
-  document.getElementById('btn-add30').addEventListener('click', () => addRestTime(30));
-  document.getElementById('btn-add60').addEventListener('click', () => addRestTime(60));
-  document.getElementById('btn-end-workout').addEventListener('click', endWorkout);
-  document.getElementById('btn-close-summary').addEventListener('click', closeRunner);
-  document.getElementById('btn-save-log').addEventListener('click', saveProgressLog);
-  document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
-  document.getElementById('btn-signout').addEventListener('click', signout);
-
-  // Weight +/- in runner
-  document.getElementById('runner-weight-up').addEventListener('click', () => {
-    const inp = document.getElementById('runner-weight');
-    inp.value = (parseFloat(inp.value) || 0) + 2.5;
-  });
-  document.getElementById('runner-weight-down').addEventListener('click', () => {
-    const inp = document.getElementById('runner-weight');
-    inp.value = Math.max(0, (parseFloat(inp.value) || 0) - 2.5);
-  });
-}
-
-// Make startRunner globally accessible (called from HTML onclick)
-window.startRunner = startRunner;
-window.generateMealPlan = generateMealPlan;
-window.generateWorkoutPlan = generateWorkoutPlan;
-
-// ── PWA ────────────────────────────────────────────────────
-
-function registerSW() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }
-}
-
-// ── Init ────────────────────────────────────────────────────
-
-document.addEventListener('DOMContentLoaded', async () => {
-  registerSW();
-  initAuthListeners();
-  initNavListeners();
-  await checkAuth();
-});
+  boot();
+})();

@@ -1,6 +1,7 @@
-const CACHE = 'forgeai-v1';
+const CACHE = 'hank-v2';
 const SHELL = [
   '/',
+  '/index.html',
   '/styles.css',
   '/main.js',
   '/manifest.json'
@@ -55,19 +56,26 @@ self.addEventListener('fetch', e => {
 
 // Push notifications
 self.addEventListener('push', e => {
-  const data = e.data ? e.data.json() : { title: 'ForgeAI', body: 'Time to train!' };
+  let data = { title: 'Hank', body: 'Reminder', url: '/' };
+  try { if (e.data) data = Object.assign(data, e.data.json()); } catch {}
   e.waitUntil(
-    self.registration.showNotification(data.title || 'ForgeAI', {
+    self.registration.showNotification(data.title || 'Hank', {
       body: data.body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: data.url ? { url: data.url } : {}
+      data: { url: data.url || '/' }
     })
   );
 });
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const url = e.notification.data?.url || '/';
-  e.waitUntil(clients.openWindow(url));
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil((async () => {
+    const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) {
+      if (c.url.includes(self.location.origin)) { c.focus(); c.navigate(url); return; }
+    }
+    clients.openWindow(url);
+  })());
 });
