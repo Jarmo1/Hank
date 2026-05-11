@@ -6,7 +6,7 @@ import {
   updateMealPlan,
   getProfile
 } from '../db.js';
-import { buildDefaultCouplesPlan } from '../couplesSeed.js';
+import { buildDefaultCouplesPlan, isCouplesShape } from '../couplesSeed.js';
 import { generateCouplesWeeklyPlan } from '../aiPlanner.js';
 
 const router = express.Router();
@@ -23,17 +23,19 @@ function findMeal(plan, day, type) {
   return dayObj.meals.find(m => m.type === type) || null;
 }
 
-// GET /api/couples-plan — current active plan (creates default if missing)
+// GET /api/couples-plan — returns the current couples plan; seeds a default
+// if the latest stored plan is missing or isn't in the couples shape (so old
+// AI-generated plans from the legacy ForgeAI UI don't break this frontend).
 router.get('/', requireAuth, async (req, res) => {
   try {
     noCache(res);
-    let row = await getLatestMealPlan(req.userId);
-    if (!row) {
-      const plan = buildDefaultCouplesPlan();
-      const saved = await saveMealPlan(req.userId, plan, 'seed');
-      return res.json({ plan, planId: saved?.id, source: 'seed', createdAt: saved?.created_at });
+    const row = await getLatestMealPlan(req.userId);
+    if (row && isCouplesShape(row.plan_json)) {
+      return res.json({ plan: row.plan_json, planId: row.id, source: row.source, createdAt: row.created_at });
     }
-    return res.json({ plan: row.plan_json, planId: row.id, source: row.source, createdAt: row.created_at });
+    const plan = buildDefaultCouplesPlan();
+    const saved = await saveMealPlan(req.userId, plan, 'seed');
+    return res.json({ plan, planId: saved?.id, source: 'seed', createdAt: saved?.created_at });
   } catch (err) {
     console.error('GET /couples-plan error:', err);
     return res.status(500).json({ error: 'Failed to load plan.' });
@@ -47,7 +49,7 @@ router.put('/meal', requireAuth, async (req, res) => {
     if (!day || !type) return res.status(400).json({ error: 'day and type are required.' });
 
     const row = await getLatestMealPlan(req.userId);
-    if (!row) return res.status(404).json({ error: 'No plan to edit.' });
+    if (!row || !isCouplesShape(row.plan_json)) return res.status(404).json({ error: 'No couples plan to edit.' });
 
     const plan = row.plan_json;
     const meal = findMeal(plan, day, type);
@@ -70,14 +72,14 @@ router.post('/next-week', requireAuth, async (req, res) => {
   try {
     const mode = String(req.body?.mode || 'duplicate');
     const current = await getLatestMealPlan(req.userId);
-    const base = current?.plan_json || buildDefaultCouplesPlan();
+    const base = (current && isCouplesShape(current.plan_json)) ? current.plan_json : buildDefaultCouplesPlan();
 
     let newPlan;
     let source;
     if (mode === 'surprise') {
       const profile = await getProfile(req.userId);
       const ai = await generateCouplesWeeklyPlan(base, profile);
-      if (ai) {
+      if (ai && isCouplesShape(ai)) {
         newPlan = ai;
         source = 'ai';
       } else {
@@ -89,7 +91,6 @@ router.post('/next-week', requireAuth, async (req, res) => {
       source = 'duplicate';
     }
 
-    // Bump week_start to next Monday (local).
     const next = nextMondayISO();
     newPlan.weekStartDate = next;
 
@@ -103,7 +104,7 @@ router.post('/next-week', requireAuth, async (req, res) => {
 
 function nextMondayISO() {
   const d = new Date();
-  const day = d.getDay(); // 0=Sun ... 6=Sat
+  const day = d.getDay();
   const offset = day === 1 ? 7 : ((8 - day) % 7) || 7;
   d.setDate(d.getDate() + offset);
   return d.toISOString().slice(0, 10);

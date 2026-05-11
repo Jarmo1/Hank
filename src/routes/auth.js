@@ -13,7 +13,12 @@ import {
   getShoppingItems
 } from '../db.js';
 import { COOKIE_NAME } from '../middleware/auth.js';
-import { buildDefaultCouplesPlan, defaultScheduledEvents, groceryToShoppingItems } from '../couplesSeed.js';
+import {
+  buildDefaultCouplesPlan,
+  defaultScheduledEvents,
+  groceryToShoppingItems,
+  isCouplesShape
+} from '../couplesSeed.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'forgeai-dev-secret-change-in-production';
@@ -31,7 +36,7 @@ function signToken(userId) {
 async function seedHouseholdDefaults(userId) {
   try {
     const existingPlan = await getLatestMealPlan(userId);
-    if (!existingPlan) {
+    if (!existingPlan || !isCouplesShape(existingPlan.plan_json)) {
       const plan = buildDefaultCouplesPlan();
       await saveMealPlan(userId, plan, 'seed');
     }
@@ -42,7 +47,8 @@ async function seedHouseholdDefaults(userId) {
     const list = await getOrCreateShoppingList(userId, null);
     const items = await getShoppingItems(list.id);
     if (items.length === 0) {
-      const grocery = (existingPlan?.plan_json?.grocery) || buildDefaultCouplesPlan().grocery;
+      const latest = await getLatestMealPlan(userId);
+      const grocery = (latest?.plan_json?.grocery) || buildDefaultCouplesPlan().grocery;
       await bulkInsertShoppingItems(list.id, groceryToShoppingItems(grocery));
     }
   } catch (err) {

@@ -133,19 +133,16 @@ export function buildDefaultGrocery() {
   ];
 }
 
-// Flat list for inserting into shopping_list_items.
 export function groceryToShoppingItems(grocery) {
   const out = [];
-  for (const section of grocery) {
-    for (const item of section.items) {
+  for (const section of grocery || []) {
+    for (const item of section.items || []) {
       out.push({ category: section.category, name: item.name, qty: item.qty, source: 'auto' });
     }
   }
   return out;
 }
 
-// Default schedule. Days follow JS getDay(): 0=Sun, 1=Mon ... 6=Sat.
-// Pilates: Mon, Wed, Thu, Fri at 07:00.
 export function defaultScheduledEvents() {
   return [
     { kind: 'meal',    label: 'Breakfast', timeLocal: '08:00', daysOfWeek: [0,1,2,3,4,5,6], message: "Time for breakfast — yoghurt + granola" },
@@ -156,8 +153,14 @@ export function defaultScheduledEvents() {
   ];
 }
 
-// Build a shallow variant of an existing plan (used by the AI "surprise me"
-// fallback and as a base shape the AI conforms to).
-export function planShape() {
-  return buildDefaultCouplesPlan();
+// True if a stored plan_json matches the couples shape used by this app.
+export function isCouplesShape(plan) {
+  if (!plan || typeof plan !== 'object') return false;
+  if (!Array.isArray(plan.days) || plan.days.length === 0) return false;
+  const d = plan.days[0];
+  if (!d || typeof d.day !== 'string' || !Array.isArray(d.meals) || d.meals.length === 0) return false;
+  const m = d.meals[0];
+  return Boolean(m && Array.isArray(m.her) && Array.isArray(m.him));
 }
+
+export function planShape() { return buildDefaultCouplesPlan(); }
