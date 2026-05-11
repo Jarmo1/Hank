@@ -1,6 +1,6 @@
 {
-  "name": "Hank",
-  "short_name": "Hank",
+  "name": "Jarmo's Meals",
+  "short_name": "Jarmo's Meals",
   "description": "Couples meal plan, shopping list and reminders",
   "start_url": "/",
   "display": "standalone",
