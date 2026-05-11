@@ -166,12 +166,12 @@
   }
 
   function renderToday() {
-    if (!State.plan) return renderTopbar('Hank') + '<div class="page"><div class="empty">No plan yet.</div></div>';
+    if (!State.plan) return renderTopbar("Jarmo's Meals") + '<div class="page"><div class="empty">No plan yet.</div></div>';
     const tk = todayKey();
     const day = (State.plan.days || []).find(d => d.day === tk);
     const pilates = isPilatesToday();
     const meals = sortMeals(day && day.meals);
-    return renderTopbar('Hank') +
+    return renderTopbar("Jarmo's Meals") +
       renderHero() +
       (pilates ? (
         '<div class="pilates-banner">' +
@@ -328,7 +328,7 @@
           '<div class="kv"><div class="k">Current</div><div class="v">' + escapeHTML(State.schedule.timezone || '') + '</div></div>' +
           '<button class="btn btn-secondary btn-block mt-12" data-action="edit-timezone">Change timezone</button>' +
         '</div>' +
-        '<div class="small muted" style="text-align:center;padding:8px">Hank · v1.1</div>' +
+        '<div class="small muted" style="text-align:center;padding:8px">Jarmo\'s Meals · v1.1</div>' +
       '</div>';
   }
 
