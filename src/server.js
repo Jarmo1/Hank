@@ -14,6 +14,7 @@ import couplesPlanRouter from './routes/couplesPlan.js';
 import shoppingRouter from './routes/shopping.js';
 import scheduleRouter from './routes/schedule.js';
 import pushRouter from './routes/push.js';
+import pinRouter from './routes/pin.js';
 import { startScheduler } from './scheduler.js';
 
 const app = express();
@@ -23,7 +24,7 @@ const __dirname = path.dirname(__filename);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' }
@@ -31,7 +32,7 @@ const authLimiter = rateLimit({
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 240,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' }
@@ -44,18 +45,17 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public'), { etag: true }));
 
 app.use('/api/auth', authLimiter, authRouter);
+app.use('/api/pin', authLimiter, pinRouter);
 app.use('/api/profile', apiLimiter, profileRouter);
 app.use('/api/plans', apiLimiter, plansRouter);
 app.use('/api/tracking', apiLimiter, trackingRouter);
 app.use('/api/workouts', apiLimiter, workoutsRouter);
 
-// Couples plan / shopping / schedule / push
 app.use('/api/couples-plan', apiLimiter, couplesPlanRouter);
 app.use('/api/shopping', apiLimiter, shoppingRouter);
 app.use('/api/schedule', apiLimiter, scheduleRouter);
 app.use('/api/push', apiLimiter, pushRouter);
 
-// SPA fallback
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });

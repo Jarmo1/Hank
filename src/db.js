@@ -56,7 +56,6 @@ export async function initDb() {
     )
   `);
 
-  // Add timezone column (couples plan / scheduler relies on it).
   await pool.query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'Australia/Brisbane'`);
 
   await pool.query(`
@@ -134,13 +133,18 @@ export async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       endpoint TEXT NOT NULL,
       p256dh TEXT NOT NULL,
       auth TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(endpoint)
     )
   `);
+
+  // Drop legacy UNIQUE(user_id) so multiple devices can subscribe.
+  // (Safe no-op if the constraint name doesn't exist.)
+  await pool.query(`ALTER TABLE push_subscriptions DROP CONSTRAINT IF EXISTS push_subscriptions_user_id_key`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_usage_logs (
@@ -152,8 +156,6 @@ export async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-
-  // ── Couples-plan additions ────────────────────────────────────────
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shopping_lists (
@@ -195,7 +197,18 @@ export async function initDb() {
     )
   `);
 
-  console.log('ForgeAI database ready.');
+  // Single-row household settings: holds the shared PIN hash.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS household_settings (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      pin_hash TEXT,
+      user_id INTEGER REFERENCES users(id),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT household_settings_single_row CHECK (id = 1)
+    )
+  `);
+
+  console.log('Hank database ready.');
 }
 
 // ── Users ──────────────────────────────────────────────────────────
@@ -227,8 +240,46 @@ export async function getUserById(id) {
   return result.rows[0] || null;
 }
 
-// ── Profiles ───────────────────────────────────────────────────────
+export async function ensureHouseholdUser() {
+  if (!pool) return null;
+  const existing = await pool.query(`SELECT id FROM users ORDER BY id ASC LIMIT 1`);
+  if (existing.rows[0]) return existing.rows[0].id;
+  const created = await pool.query(
+    `INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
+    ['household@hank.local', 'PIN_ONLY_ACCOUNT']
+  );
+  return created.rows[0].id;
+}
 
+// ── Household PIN ────────────────────────────────────────────────────
+export async function getHouseholdSettings() {
+  if (!pool) return null;
+  const r = await pool.query(`SELECT * FROM household_settings WHERE id = 1`);
+  return r.rows[0] || null;
+}
+
+export async function isHouseholdPinSet() {
+  const s = await getHouseholdSettings();
+  return Boolean(s?.pin_hash);
+}
+
+export async function setHouseholdPin(pinHash, userId) {
+  if (!pool) return null;
+  const r = await pool.query(`
+    INSERT INTO household_settings (id, pin_hash, user_id, updated_at)
+    VALUES (1, $1, $2, NOW())
+    ON CONFLICT (id) DO UPDATE SET pin_hash = EXCLUDED.pin_hash, user_id = EXCLUDED.user_id, updated_at = NOW()
+    RETURNING *
+  `, [pinHash, userId]);
+  return r.rows[0];
+}
+
+export async function clearHouseholdPin() {
+  if (!pool) return;
+  await pool.query(`UPDATE household_settings SET pin_hash = NULL, updated_at = NOW() WHERE id = 1`);
+}
+
+// ── Profiles ─────────────────────────────────────────────────────────
 export async function getProfile(userId) {
   if (!pool) return null;
   const result = await pool.query(`SELECT * FROM user_profiles WHERE user_id = $1`, [userId]);
@@ -268,24 +319,12 @@ export async function upsertProfile(userId, data) {
     RETURNING *
   `, [
     userId,
-    data.fullName || null,
-    data.age || null,
-    data.sex || null,
-    data.weightKg || null,
-    data.heightCm || null,
-    data.goal || null,
-    data.activityLevel || null,
-    data.workoutDays || null,
-    data.dietType || null,
-    data.allergies || null,
-    data.dislikes || null,
-    data.mealsPerDay || 3,
-    data.cookingPreference || null,
-    data.gymAccess || null,
-    data.workoutPreference || null,
-    data.injuries || null,
-    data.waterGoalMl || 2500,
-    JSON.stringify(data.notificationPrefs || {}),
+    data.fullName || null, data.age || null, data.sex || null, data.weightKg || null,
+    data.heightCm || null, data.goal || null, data.activityLevel || null,
+    data.workoutDays || null, data.dietType || null, data.allergies || null,
+    data.dislikes || null, data.mealsPerDay || 3, data.cookingPreference || null,
+    data.gymAccess || null, data.workoutPreference || null, data.injuries || null,
+    data.waterGoalMl || 2500, JSON.stringify(data.notificationPrefs || {}),
     data.onboardingComplete || false
   ]);
   return result.rows[0];
@@ -301,7 +340,6 @@ export async function setUserTimezone(userId, tz) {
 }
 
 // ── Meal Plans ─────────────────────────────────────────────────────
-
 export async function saveMealPlan(userId, planJson, source = 'ai', weekStartDate = null) {
   if (!pool) return null;
   const result = await pool.query(
@@ -338,8 +376,7 @@ export async function listMealPlans(userId, limit = 10) {
   return r.rows;
 }
 
-// ── Workout Plans ──────────────────────────────────────────────────
-
+// ── Workout Plans ───────────────────────────────────────────────────
 export async function saveWorkoutPlan(userId, planJson, source = 'ai') {
   if (!pool) return null;
   await pool.query(`UPDATE workout_plans SET active = FALSE WHERE user_id = $1`, [userId]);
@@ -360,7 +397,6 @@ export async function getActiveWorkoutPlan(userId) {
 }
 
 // ── Workout Sessions ───────────────────────────────────────────────
-
 export async function saveWorkoutSession(userId, data) {
   if (!pool) return null;
   const result = await pool.query(`
@@ -369,15 +405,11 @@ export async function saveWorkoutSession(userId, data) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING id, created_at
   `, [
-    userId,
-    data.workoutPlanId || null,
+    userId, data.workoutPlanId || null,
     data.sessionDate || new Date().toISOString().slice(0, 10),
-    data.dayLabel || null,
-    JSON.stringify(data.exercises || []),
-    data.totalTimeSeconds || null,
-    data.totalVolumeKg || null,
-    data.notes || null,
-    data.completedAt || new Date().toISOString()
+    data.dayLabel || null, JSON.stringify(data.exercises || []),
+    data.totalTimeSeconds || null, data.totalVolumeKg || null,
+    data.notes || null, data.completedAt || new Date().toISOString()
   ]);
   return result.rows[0];
 }
@@ -392,7 +424,6 @@ export async function getWorkoutSessions(userId, limit = 20) {
 }
 
 // ── Progress Logs ──────────────────────────────────────────────────
-
 export async function upsertProgressLog(userId, date, data) {
   if (!pool) return null;
   const result = await pool.query(`
@@ -411,14 +442,10 @@ export async function upsertProgressLog(userId, date, data) {
     RETURNING *
   `, [
     userId, date,
-    data.weightKg || null,
-    data.caloriesConsumed || null,
-    data.proteinGrams || null,
-    data.carbsGrams || null,
-    data.fatsGrams || null,
-    data.waterMl || null,
-    data.steps || null,
-    data.notes || null
+    data.weightKg || null, data.caloriesConsumed || null,
+    data.proteinGrams || null, data.carbsGrams || null,
+    data.fatsGrams || null, data.waterMl || null,
+    data.steps || null, data.notes || null
   ]);
   return result.rows[0];
 }
@@ -443,14 +470,9 @@ export async function saveFoodLog(userId, entry) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
     RETURNING id, created_at
   `, [
-    userId,
-    entry.mealName,
-    entry.calories || 0,
-    entry.proteinGrams || 0,
-    entry.carbsGrams || 0,
-    entry.fatsGrams || 0,
-    entry.servingSize || null,
-    entry.notes || null
+    userId, entry.mealName, entry.calories || 0,
+    entry.proteinGrams || 0, entry.carbsGrams || 0, entry.fatsGrams || 0,
+    entry.servingSize || null, entry.notes || null
   ]);
   return { id: result.rows[0].id, persisted: true };
 }
@@ -465,20 +487,19 @@ export async function getTodayFoodLogs(userId) {
 }
 
 // ── Push Subscriptions ─────────────────────────────────────────────
-
 export async function savePushSubscription(userId, sub) {
   if (!pool) return null;
   await pool.query(`
     INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
     VALUES ($1,$2,$3,$4)
-    ON CONFLICT (user_id) DO UPDATE SET endpoint=$2, p256dh=$3, auth=$4
+    ON CONFLICT (endpoint) DO UPDATE SET user_id=$1, p256dh=$3, auth=$4
   `, [userId, sub.endpoint, sub.keys.p256dh, sub.keys.auth]);
 }
 
 export async function getPushSubscription(userId) {
   if (!pool) return null;
   const result = await pool.query(
-    `SELECT * FROM push_subscriptions WHERE user_id = $1`,
+    `SELECT * FROM push_subscriptions WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
     [userId]
   );
   return result.rows[0] || null;
@@ -490,11 +511,10 @@ export async function deletePushSubscriptionByEndpoint(endpoint) {
 }
 
 // ── Shopping Lists ─────────────────────────────────────────────────
-
 export async function getOrCreateShoppingList(userId, weekStartDate) {
   if (!pool) return null;
   const existing = await pool.query(
-    `SELECT * FROM shopping_lists WHERE user_id = $1 AND week_start_date = $2`,
+    `SELECT * FROM shopping_lists WHERE user_id = $1 AND week_start_date IS NOT DISTINCT FROM $2`,
     [userId, weekStartDate]
   );
   if (existing.rows[0]) return existing.rows[0];
@@ -535,9 +555,7 @@ export async function addShoppingItem(listId, item) {
 
 export async function updateShoppingItem(itemId, listId, patch) {
   if (!pool) return null;
-  const fields = [];
-  const values = [];
-  let i = 1;
+  const fields = []; const values = []; let i = 1;
   if (patch.name !== undefined)     { fields.push(`name = $${i++}`);     values.push(patch.name); }
   if (patch.qty !== undefined)      { fields.push(`qty = $${i++}`);      values.push(patch.qty); }
   if (patch.category !== undefined) { fields.push(`category = $${i++}`); values.push(patch.category); }
@@ -580,8 +598,7 @@ export async function bulkInsertShoppingItems(listId, items) {
   );
 }
 
-// ── Scheduled Events (meal reminders, pilates, custom) ────────────
-
+// ── Scheduled Events ─────────────────────────────────────────────────
 export async function listScheduledEvents(userId) {
   if (!pool) return [];
   const r = await pool.query(
@@ -615,9 +632,7 @@ export async function createScheduledEvent(userId, ev) {
 
 export async function updateScheduledEvent(userId, id, patch) {
   if (!pool) return null;
-  const fields = [];
-  const values = [];
-  let i = 1;
+  const fields = []; const values = []; let i = 1;
   if (patch.label !== undefined)      { fields.push(`label = $${i++}`);        values.push(patch.label); }
   if (patch.timeLocal !== undefined)  { fields.push(`time_local = $${i++}`);   values.push(patch.timeLocal); }
   if (patch.daysOfWeek !== undefined) { fields.push(`days_of_week = $${i++}`); values.push(patch.daysOfWeek); }

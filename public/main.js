@@ -20,11 +20,14 @@
     pushSubscribed: false,
     tab: 'today',
     selectedDay: DAYS[new Date().getDay()],
-    authMode: 'signup',
-    authError: ''
+    // PIN screen state
+    pinMode: 'enter',   // 'enter' | 'create-1' | 'create-2'
+    pinBuffer: '',
+    pinFirst: '',
+    pinError: ''
   };
 
-  // ------- API helpers -------
+  // ------- API -------
   async function api(path, opts) {
     opts = opts || {};
     const res = await fetch(path, {
@@ -49,7 +52,7 @@
   const apiPatch = (p, b) => api(p, { method:'PATCH', body: JSON.stringify(b || {}) });
   const apiDel   = (p)    => api(p, { method:'DELETE' });
 
-  // ------- Icons (inline SVG) -------
+  // ------- Icons -------
   const I = {
     home:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
     cal:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
@@ -63,10 +66,11 @@
     spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/></svg>',
     refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>',
     yoga:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v5l-4 3 3 6"/><path d="M12 12l4 3-3 6"/><path d="M5 13h14"/></svg>',
-    fork:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v8a2 2 0 1 1-4 0V2M5 10v12"/><path d="M17 2c-2 0-3 2-3 5s1 5 3 5v10"/></svg>'
+    fork:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v8a2 2 0 1 1-4 0V2M5 10v12"/><path d="M17 2c-2 0-3 2-3 5s1 5 3 5v10"/></svg>',
+    back:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>'
   };
 
-  // ------- View helpers -------
+  // ------- helpers -------
   function escapeHTML(s) {
     return String(s == null ? '' : s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
@@ -80,9 +84,7 @@
     monday.setDate(now.getDate() + mondayOffset);
     const out = {};
     ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach((k, i) => {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      out[k] = d;
+      const d = new Date(monday); d.setDate(monday.getDate() + i); out[k] = d;
     });
     return out;
   }
@@ -97,13 +99,12 @@
     const existing = document.querySelector('.toast');
     if (existing) existing.remove();
     const t = document.createElement('div');
-    t.className = 'toast show';
-    t.textContent = msg;
+    t.className = 'toast show'; t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 200); }, 1800);
   }
 
-  // ------- Renderers -------
+  // ------- Renderers (app) -------
   function renderTabbar() {
     function tab(id, icon, label) {
       const active = State.tab === id;
@@ -141,14 +142,12 @@
       e.kind === 'pilates' && e.enabled && Array.isArray(e.days_of_week) && e.days_of_week.indexOf(dow) !== -1
     ) || null;
   }
-
   function sortMeals(meals) {
     return (meals || []).slice().sort((a, b) => (MEAL_ORDER[a.type] != null ? MEAL_ORDER[a.type] : 99) - (MEAL_ORDER[b.type] != null ? MEAL_ORDER[b.type] : 99));
   }
 
   function renderMealCard(m, dayKey) {
-    const her = (m.her || []);
-    const him = (m.him || []);
+    const her = (m.her || []); const him = (m.him || []);
     const hList = her.length ? her.map(s => '<li>' + escapeHTML(s) + '</li>').join('') : '<li class="empty">—</li>';
     const mList = him.length ? him.map(s => '<li>' + escapeHTML(s) + '</li>').join('') : '<li class="empty">—</li>';
     return '<div class="meal-card">' +
@@ -196,8 +195,7 @@
     const dates = weekDates();
     const order = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
     const chips = order.map(k => {
-      const isToday = k === tk;
-      const active = k === sel;
+      const isToday = k === tk; const active = k === sel;
       return '<button class="day-chip ' + (active?'active':'') + ' ' + (isToday?'today':'') + '" data-action="select-day" data-day="' + k + '">' +
         '<div class="d">' + DAY_LABELS[k] + '</div>' +
         '<div class="n">' + (dates[k] ? dates[k].getDate() : '') + '</div>' +
@@ -224,8 +222,7 @@
     const items = State.shopping.items || [];
     const total = items.length;
     const done = items.filter(i => i.checked).length;
-    const byCat = {};
-    const order = [];
+    const byCat = {}; const order = [];
     items.forEach(it => {
       const c = it.category || 'Other';
       if (!byCat[c]) { byCat[c] = []; order.push(c); }
@@ -250,8 +247,8 @@
         '<div class="row between" style="margin: 2px 4px 12px">' +
           '<div class="bold">Your list <span class="shop-counter">' + done + '/' + total + ' done</span></div>' +
           '<div class="row gap-6">' +
-            '<button class="icon-btn" data-action="regen-shopping" title="Regenerate from plan" aria-label="Regenerate">' + I.refresh + '</button>' +
-            '<button class="icon-btn" data-action="clear-checked" title="Clear ticked" aria-label="Clear checked">' + I.trash + '</button>' +
+            '<button class="icon-btn" data-action="regen-shopping" aria-label="Regenerate">' + I.refresh + '</button>' +
+            '<button class="icon-btn" data-action="clear-checked" aria-label="Clear checked">' + I.trash + '</button>' +
           '</div>' +
         '</div>' +
         '<form class="add-row" data-action="add-shop-item">' +
@@ -309,9 +306,9 @@
     return renderTopbar('Settings') +
       '<div class="page">' +
         '<div class="card">' +
-          '<div class="bold">Account</div>' +
-          '<div class="kv"><div class="k">User</div><div class="v">#' + escapeHTML(String(State.user && State.user.id)) + '</div></div>' +
-          '<button class="btn btn-ghost btn-block mt-12" data-action="signout">Sign out</button>' +
+          '<div class="bold">Household</div>' +
+          '<div class="kv"><div class="k">Locked with</div><div class="v">4-digit PIN</div></div>' +
+          '<button class="btn btn-ghost btn-block mt-12" data-action="signout">Lock app</button>' +
         '</div>' +
         '<div class="card">' +
           '<div class="bold">Push notifications</div>' +
@@ -331,34 +328,11 @@
           '<div class="kv"><div class="k">Current</div><div class="v">' + escapeHTML(State.schedule.timezone || '') + '</div></div>' +
           '<button class="btn btn-secondary btn-block mt-12" data-action="edit-timezone">Change timezone</button>' +
         '</div>' +
-        '<div class="small muted" style="text-align:center;padding:8px">Hank · v1.0</div>' +
+        '<div class="small muted" style="text-align:center;padding:8px">Hank · v1.1</div>' +
       '</div>';
   }
 
-  function renderAuth() {
-    const mode = State.authMode;
-    const err = State.authError;
-    setApp(
-      '<div class="auth-wrap">' +
-        '<div class="auth-logo">' + I.fork + '</div>' +
-        '<h1 class="auth-title">Hank</h1>' +
-        '<p class="auth-sub">Couples meal plan, shopping list and reminders.</p>' +
-        '<div class="auth-tabs">' +
-          '<button class="at ' + (mode==='signin'?'active':'') + '" data-action="auth-mode" data-mode="signin">Sign in</button>' +
-          '<button class="at ' + (mode==='signup'?'active':'') + '" data-action="auth-mode" data-mode="signup">Create account</button>' +
-        '</div>' +
-        '<form class="auth-form" data-action="auth-submit">' +
-          (err ? '<div class="auth-error">' + escapeHTML(err) + '</div>' : '') +
-          '<div class="field"><label>Email</label><input type="email" name="email" autocomplete="email" required /></div>' +
-          '<div class="field"><label>Password</label><input type="password" name="password" autocomplete="' + (mode==='signin'?'current-password':'new-password') + '" required minlength="8" /></div>' +
-          '<button class="btn btn-primary btn-block" type="submit">' + (mode==='signin'?'Sign in':'Create account') + '</button>' +
-        '</form>' +
-        '<div class="auth-help">Use one shared account for the household.</div>' +
-      '</div>'
-    );
-  }
-
-  function render() {
+  function renderHome() {
     let body = '';
     switch (State.tab) {
       case 'today':    body = renderToday(); break;
@@ -369,6 +343,105 @@
       default:         body = renderToday();
     }
     setApp('<div class="app">' + body + renderTabbar() + '</div>');
+  }
+
+  // ------- PIN screen -------
+  function renderPin(shake) {
+    let title = 'Enter your PIN';
+    let sub = 'Tap your 4-digit household PIN.';
+    if (State.pinMode === 'create-1') { title = 'Set a PIN'; sub = 'Choose a 4-digit code for your household.'; }
+    if (State.pinMode === 'create-2') { title = 'Confirm PIN'; sub = 'Type it again to confirm.'; }
+
+    const dots = [0,1,2,3].map(i => '<div class="pin-dot ' + (i < State.pinBuffer.length ? 'filled' : '') + '"></div>').join('');
+    const pad = [
+      ['1','2','3'],
+      ['4','5','6'],
+      ['7','8','9'],
+      ['empty','0','back']
+    ].map(row => row.map(k => {
+      if (k === 'empty') return '<div class="pin-key empty"></div>';
+      if (k === 'back')  return '<button class="pin-key icon" data-action="pin-back" aria-label="Backspace">' + I.back + '</button>';
+      return '<button class="pin-key" data-action="pin-key" data-k="' + k + '">' + k + '</button>';
+    }).join('')).join('');
+
+    setApp(
+      '<div class="pin-wrap' + (shake?' pin-shake':'') + '">' +
+        '<div class="pin-top">' +
+          '<div class="pin-logo">' + I.fork + '</div>' +
+          '<h1 class="pin-title">' + escapeHTML(title) + '</h1>' +
+          '<p class="pin-sub">' + escapeHTML(sub) + '</p>' +
+          '<div class="pin-error">' + escapeHTML(State.pinError || '') + '</div>' +
+          '<div class="pin-dots">' + dots + '</div>' +
+        '</div>' +
+        '<div class="pin-pad">' + pad + '</div>' +
+        '<div class="pin-foot">' +
+          (State.pinMode !== 'enter' ? '<button data-action="pin-restart">Restart</button>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function updatePinDotsOnly() {
+    const dots = document.querySelectorAll('.pin-dot');
+    dots.forEach((d, i) => d.classList.toggle('filled', i < State.pinBuffer.length));
+  }
+
+  function applyShake() {
+    const wrap = document.querySelector('.pin-wrap');
+    if (!wrap) return;
+    wrap.classList.remove('pin-shake');
+    // restart animation
+    void wrap.offsetWidth;
+    wrap.classList.add('pin-shake');
+  }
+
+  async function handlePinComplete() {
+    if (State.pinMode === 'create-1') {
+      State.pinFirst = State.pinBuffer;
+      State.pinBuffer = '';
+      State.pinMode = 'create-2';
+      State.pinError = '';
+      renderPin();
+      return;
+    }
+    if (State.pinMode === 'create-2') {
+      if (State.pinFirst !== State.pinBuffer) {
+        State.pinError = "PINs didn't match. Try again.";
+        State.pinBuffer = '';
+        State.pinFirst = '';
+        State.pinMode = 'create-1';
+        applyShake();
+        setTimeout(renderPin, 360);
+        return;
+      }
+      try {
+        await apiPost('/api/pin/set', { pin: State.pinBuffer });
+        State.user = { id: 1 };
+        State.pinBuffer = ''; State.pinFirst = ''; State.pinError = '';
+        await loadAll();
+        State.tab = 'today';
+        renderHome();
+      } catch (err) {
+        State.pinError = err.message || 'Failed to set PIN';
+        State.pinBuffer = ''; State.pinFirst = ''; State.pinMode = 'create-1';
+        applyShake(); setTimeout(renderPin, 360);
+      }
+      return;
+    }
+    // enter
+    try {
+      await apiPost('/api/pin/verify', { pin: State.pinBuffer });
+      State.user = { id: 1 };
+      State.pinBuffer = ''; State.pinError = '';
+      await loadAll();
+      State.tab = 'today';
+      renderHome();
+    } catch (err) {
+      State.pinError = err.status === 401 ? 'Wrong PIN' : (err.message || 'Failed');
+      State.pinBuffer = '';
+      applyShake();
+      setTimeout(renderPin, 360);
+    }
   }
 
   // ------- Modal -------
@@ -383,10 +456,7 @@
     const firstInput = m.querySelector('input, textarea, select');
     if (firstInput && !center) setTimeout(() => firstInput.focus(), 100);
   }
-  function hideModal() {
-    const cur = document.querySelector('.modal');
-    if (cur) cur.remove();
-  }
+  function hideModal() { const cur = document.querySelector('.modal'); if (cur) cur.remove(); }
 
   function showEditMealModal(day, type) {
     const dayObj = (State.plan.days || []).find(d => d.day === day);
@@ -407,17 +477,16 @@
       '</form>'
     );
   }
-
   function showAddEventModal() {
     const toggles = DOW_ORDER.map(d => '<button type="button" class="day-toggle on" data-action="newday-toggle" data-d="' + d + '">' + DOW_INITIAL[d] + '</button>').join('');
     showModal(
       '<h3>Add reminder</h3>' +
       '<form data-action="create-event">' +
         '<div class="field"><label>Type</label><select name="kind"><option value="custom">Other</option><option value="meal">Meal</option><option value="pilates">Pilates</option></select></div>' +
-        '<div class="field"><label>Label</label><input type="text" name="label" required placeholder="e.g. Water reminder" /></div>' +
+        '<div class="field"><label>Label</label><input type="text" name="label" required /></div>' +
         '<div class="field"><label>Time</label><input type="time" name="timeLocal" value="08:00" required /></div>' +
         '<div class="field"><label>Days</label><div class="day-toggles">' + toggles + '</div></div>' +
-        '<div class="field"><label>Message (optional)</label><input type="text" name="message" placeholder="Shown in the notification" /></div>' +
+        '<div class="field"><label>Message (optional)</label><input type="text" name="message" /></div>' +
         '<div class="modal-actions">' +
           '<button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button>' +
           '<button type="submit" class="btn btn-primary">Add</button>' +
@@ -425,7 +494,6 @@
       '</form>'
     );
   }
-
   function showRenameEventModal(id) {
     const ev = State.schedule.events.find(e => e.id === id);
     if (!ev) return;
@@ -441,7 +509,6 @@
       '</form>'
     );
   }
-
   function showTimezoneModal() {
     const cur = State.schedule.timezone || 'Australia/Brisbane';
     const opts = ['Australia/Brisbane','Australia/Sydney','Australia/Melbourne','Australia/Adelaide','Australia/Perth','Australia/Darwin','Australia/Hobart','Pacific/Auckland','UTC'];
@@ -459,8 +526,23 @@
 
   // ------- Actions -------
   const Actions = {
-    'tab': (el) => { State.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
-    'select-day': (el) => { State.selectedDay = el.dataset.day; render(); },
+    'pin-key': (el) => {
+      if (State.pinBuffer.length >= 4) return;
+      State.pinBuffer += el.dataset.k;
+      updatePinDotsOnly();
+      if (State.pinBuffer.length === 4) setTimeout(handlePinComplete, 120);
+    },
+    'pin-back': () => {
+      State.pinBuffer = State.pinBuffer.slice(0, -1);
+      updatePinDotsOnly();
+    },
+    'pin-restart': () => {
+      State.pinBuffer = ''; State.pinFirst = ''; State.pinMode = 'create-1'; State.pinError = '';
+      renderPin();
+    },
+
+    'tab': (el) => { State.tab = el.dataset.tab; renderHome(); window.scrollTo(0, 0); },
+    'select-day': (el) => { State.selectedDay = el.dataset.day; renderHome(); },
     'edit-meal': (el) => showEditMealModal(el.dataset.day, el.dataset.type),
     'close-modal': () => hideModal(),
 
@@ -468,34 +550,25 @@
       e && e.preventDefault();
       const form = el.closest('form') || el;
       const fd = new FormData(form);
-      const day = form.dataset.day;
-      const type = form.dataset.type;
+      const day = form.dataset.day; const type = form.dataset.type;
       const name = String(fd.get('name') || '').trim();
       const her = String(fd.get('her') || '').split('\n').map(s => s.trim()).filter(Boolean);
       const him = String(fd.get('him') || '').split('\n').map(s => s.trim()).filter(Boolean);
       try {
         const out = await apiPut('/api/couples-plan/meal', { day, type, name, her, him });
         State.plan = out.plan;
-        hideModal();
-        toast('Saved');
-        render();
+        hideModal(); toast('Saved'); renderHome();
       } catch (err) { toast(err.message || 'Save failed'); }
     },
-
     'next-week': async (el) => {
       const mode = el.dataset.mode;
       toast(mode === 'surprise' ? 'Generating fresh meals…' : 'Duplicating this week…');
       try {
         const out = await apiPost('/api/couples-plan/next-week', { mode });
-        State.plan = out.plan;
-        State.planId = out.planId;
-        State.planSource = out.source;
+        State.plan = out.plan; State.planId = out.planId; State.planSource = out.source;
         toast(mode === 'surprise' ? 'Fresh plan ready' : 'Next week ready');
-        try {
-          const sh = await apiPost('/api/shopping/regenerate', {});
-          State.shopping = sh;
-        } catch (_) {}
-        render();
+        try { const sh = await apiPost('/api/shopping/regenerate', {}); State.shopping = sh; } catch (_) {}
+        renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
 
@@ -505,22 +578,21 @@
       if (!item) return;
       const next = !item.checked;
       item.checked = next;
-      render();
+      renderHome();
       try { await apiPatch('/api/shopping/items/' + id, { checked: next }); }
-      catch (err) { item.checked = !next; render(); toast(err.message || 'Failed'); }
+      catch (err) { item.checked = !next; renderHome(); toast(err.message || 'Failed'); }
     },
     'add-shop-item': async (el, e) => {
       e && e.preventDefault();
       const form = el.closest('form') || el;
       const fd = new FormData(form);
       const name = String(fd.get('name') || '').trim();
-      const qty = String(fd.get('qty') || '').trim();
+      const qty  = String(fd.get('qty') || '').trim();
       if (!name) return;
       try {
         const out = await apiPost('/api/shopping/items', { name, qty });
         State.shopping.items.push(out.item);
-        form.reset();
-        render();
+        form.reset(); renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'delete-shop': async (el, e) => {
@@ -529,25 +601,18 @@
       try {
         await apiDel('/api/shopping/items/' + id);
         State.shopping.items = State.shopping.items.filter(i => i.id !== id);
-        render();
+        renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'regen-shopping': async () => {
       if (!confirm('Replace the auto-generated items from your meal plan? (Manual items stay.)')) return;
-      try {
-        const out = await apiPost('/api/shopping/regenerate', {});
-        State.shopping = out;
-        toast('Shopping list refreshed');
-        render();
-      } catch (err) { toast(err.message || 'Failed'); }
+      try { const out = await apiPost('/api/shopping/regenerate', {}); State.shopping = out; toast('Shopping list refreshed'); renderHome(); }
+      catch (err) { toast(err.message || 'Failed'); }
     },
     'clear-checked': async () => {
       if (!confirm('Remove all ticked items?')) return;
-      try {
-        const out = await apiPost('/api/shopping/clear-checked', {});
-        State.shopping = out;
-        render();
-      } catch (err) { toast(err.message || 'Failed'); }
+      try { const out = await apiPost('/api/shopping/clear-checked', {}); State.shopping = out; renderHome(); }
+      catch (err) { toast(err.message || 'Failed'); }
     },
 
     'add-event': () => showAddEventModal(),
@@ -563,48 +628,33 @@
       const daysOfWeek = Array.from(form.querySelectorAll('.day-toggle.on')).map(b => Number(b.dataset.d));
       try {
         const out = await apiPost('/api/schedule', { kind, label, timeLocal, daysOfWeek, message });
-        State.schedule.events.push(out.event);
-        hideModal();
-        toast('Reminder added');
-        render();
+        State.schedule.events.push(out.event); hideModal(); toast('Reminder added'); renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'event-time': async (el) => {
       const id = Number(el.dataset.id);
-      const ev = State.schedule.events.find(x => x.id === id);
-      if (!ev) return;
-      const newTime = el.value;
-      const prev = ev.time_local;
-      try {
-        const out = await apiPatch('/api/schedule/' + id, { timeLocal: newTime });
-        Object.assign(ev, out.event);
-        toast('Time updated');
-      } catch (err) { el.value = prev; toast(err.message || 'Failed'); }
+      const ev = State.schedule.events.find(x => x.id === id); if (!ev) return;
+      const newTime = el.value; const prev = ev.time_local;
+      try { const out = await apiPatch('/api/schedule/' + id, { timeLocal: newTime }); Object.assign(ev, out.event); toast('Time updated'); }
+      catch (err) { el.value = prev; toast(err.message || 'Failed'); }
     },
     'event-day': async (el) => {
-      const id = Number(el.dataset.id);
-      const d = Number(el.dataset.d);
-      const ev = State.schedule.events.find(x => x.id === id);
-      if (!ev) return;
+      const id = Number(el.dataset.id); const d = Number(el.dataset.d);
+      const ev = State.schedule.events.find(x => x.id === id); if (!ev) return;
       const set = new Set(ev.days_of_week || []);
       if (set.has(d)) set.delete(d); else set.add(d);
       const daysOfWeek = Array.from(set).sort((a, b) => a - b);
       el.classList.toggle('on');
-      try {
-        const out = await apiPatch('/api/schedule/' + id, { daysOfWeek });
-        Object.assign(ev, out.event);
-      } catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
+      try { const out = await apiPatch('/api/schedule/' + id, { daysOfWeek }); Object.assign(ev, out.event); }
+      catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
     },
     'toggle-event': async (el) => {
       const id = Number(el.dataset.id);
-      const ev = State.schedule.events.find(x => x.id === id);
-      if (!ev) return;
+      const ev = State.schedule.events.find(x => x.id === id); if (!ev) return;
       const next = !ev.enabled;
       el.classList.toggle('on');
-      try {
-        const out = await apiPatch('/api/schedule/' + id, { enabled: next });
-        Object.assign(ev, out.event);
-      } catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
+      try { const out = await apiPatch('/api/schedule/' + id, { enabled: next }); Object.assign(ev, out.event); }
+      catch (err) { el.classList.toggle('on'); toast(err.message || 'Failed'); }
     },
     'rename-event': (el) => showRenameEventModal(Number(el.dataset.id)),
     'rename-save': async (el, e) => {
@@ -616,11 +666,8 @@
       const message = String(fd.get('message') || '').trim() || null;
       try {
         const out = await apiPatch('/api/schedule/' + id, { label, message });
-        const ev = State.schedule.events.find(x => x.id === id);
-        if (ev) Object.assign(ev, out.event);
-        hideModal();
-        toast('Saved');
-        render();
+        const ev = State.schedule.events.find(x => x.id === id); if (ev) Object.assign(ev, out.event);
+        hideModal(); toast('Saved'); renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'delete-event': async (el) => {
@@ -629,7 +676,7 @@
       try {
         await apiDel('/api/schedule/' + id);
         State.schedule.events = State.schedule.events.filter(x => x.id !== id);
-        render();
+        renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'edit-timezone': () => showTimezoneModal(),
@@ -637,13 +684,8 @@
       e && e.preventDefault();
       const form = el.closest('form') || el;
       const tz = String(new FormData(form).get('tz') || '');
-      try {
-        await apiPut('/api/schedule/timezone', { timezone: tz });
-        State.schedule.timezone = tz;
-        hideModal();
-        toast('Timezone updated');
-        render();
-      } catch (err) { toast(err.message || 'Failed'); }
+      try { await apiPut('/api/schedule/timezone', { timezone: tz }); State.schedule.timezone = tz; hideModal(); toast('Timezone updated'); renderHome(); }
+      catch (err) { toast(err.message || 'Failed'); }
     },
 
     'push-on': async () => {
@@ -658,22 +700,15 @@
           applicationServerKey: urlBase64ToUint8Array(State.vapidKey)
         });
         await apiPost('/api/push/subscribe', sub.toJSON());
-        State.pushSubscribed = true;
-        toast('Notifications enabled');
-        render();
+        State.pushSubscribed = true; toast('Notifications enabled'); renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'push-off': async () => {
       try {
         const reg = await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.getSubscription();
-        if (sub) {
-          await apiPost('/api/push/unsubscribe', { endpoint: sub.endpoint });
-          await sub.unsubscribe();
-        }
-        State.pushSubscribed = false;
-        toast('Notifications disabled');
-        render();
+        if (sub) { await apiPost('/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+        State.pushSubscribed = false; toast('Notifications disabled'); renderHome();
       } catch (err) { toast(err.message || 'Failed'); }
     },
     'push-test': async () => {
@@ -687,26 +722,8 @@
       State.plan = null;
       State.shopping = { list: null, items: [] };
       State.schedule = { events: [], timezone: 'Australia/Brisbane' };
-      renderAuth();
-    },
-    'auth-mode': (el) => { State.authMode = el.dataset.mode; State.authError = ''; renderAuth(); },
-    'auth-submit': async (el, e) => {
-      e && e.preventDefault();
-      const form = el.closest('form') || el;
-      const fd = new FormData(form);
-      const email = String(fd.get('email') || '').trim();
-      const password = String(fd.get('password') || '');
-      try {
-        const out = await apiPost(State.authMode === 'signin' ? '/api/auth/signin' : '/api/auth/signup', { email, password });
-        State.user = out.user || null;
-        State.authError = '';
-        await loadAll();
-        State.tab = 'today';
-        render();
-      } catch (err) {
-        State.authError = err.message || 'Failed';
-        renderAuth();
-      }
+      State.pinMode = 'enter'; State.pinBuffer = ''; State.pinError = '';
+      renderPin();
     }
   };
 
@@ -737,6 +754,17 @@
     if (!el) return;
     if (el.dataset.action === 'event-time' && Actions['event-time']) Actions['event-time'](el, e);
   });
+  // Keyboard support for PIN screen
+  document.addEventListener('keydown', (e) => {
+    if (!document.querySelector('.pin-wrap')) return;
+    if (/^[0-9]$/.test(e.key)) {
+      if (State.pinBuffer.length >= 4) return;
+      State.pinBuffer += e.key; updatePinDotsOnly();
+      if (State.pinBuffer.length === 4) setTimeout(handlePinComplete, 120);
+    } else if (e.key === 'Backspace') {
+      State.pinBuffer = State.pinBuffer.slice(0, -1); updatePinDotsOnly();
+    }
+  });
 
   // ------- Boot -------
   async function loadAll() {
@@ -747,14 +775,10 @@
       apiGet('/api/push/vapid').catch(() => ({ publicKey: null }))
     ];
     const [plan, shopping, schedule, vapid] = await Promise.all(tasks);
-    if (plan) {
-      State.plan = plan.plan;
-      State.planId = plan.planId;
-      State.planSource = plan.source;
-    }
+    if (plan)     { State.plan = plan.plan; State.planId = plan.planId; State.planSource = plan.source; }
     if (shopping) State.shopping = shopping;
     if (schedule) State.schedule = schedule;
-    if (vapid) State.vapidKey = vapid.publicKey;
+    if (vapid)    State.vapidKey = vapid.publicKey;
     if ('serviceWorker' in navigator && 'PushManager' in window) {
       try {
         const reg = await navigator.serviceWorker.ready;
@@ -770,10 +794,17 @@
     }
     let me;
     try { me = await apiGet('/api/auth/me'); } catch (_) { me = { userId: null }; }
-    if (!me || !me.userId) { renderAuth(); return; }
-    State.user = { id: me.userId };
-    await loadAll();
-    render();
+    if (me && me.userId) {
+      State.user = { id: me.userId };
+      await loadAll();
+      renderHome();
+      return;
+    }
+    let status;
+    try { status = await apiGet('/api/pin/status'); } catch (_) { status = { isSet: false }; }
+    State.pinMode = status.isSet ? 'enter' : 'create-1';
+    State.pinBuffer = ''; State.pinFirst = ''; State.pinError = '';
+    renderPin();
   }
   boot();
 })();
