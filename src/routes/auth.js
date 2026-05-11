@@ -1,8 +1,24 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { createUser, getUserByEmail } from '../db.js';
+import {
+  createUser,
+  getUserByEmail,
+  saveMealPlan,
+  getLatestMealPlan,
+  bulkInsertScheduledEvents,
+  listScheduledEvents,
+  getOrCreateShoppingList,
+  bulkInsertShoppingItems,
+  getShoppingItems
+} from '../db.js';
 import { COOKIE_NAME } from '../middleware/auth.js';
+import {
+  buildDefaultCouplesPlan,
+  defaultScheduledEvents,
+  groceryToShoppingItems,
+  isCouplesShape
+} from '../couplesSeed.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'forgeai-dev-secret-change-in-production';
@@ -15,6 +31,29 @@ const COOKIE_OPTS = {
 
 function signToken(userId) {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+async function seedHouseholdDefaults(userId) {
+  try {
+    const existingPlan = await getLatestMealPlan(userId);
+    if (!existingPlan || !isCouplesShape(existingPlan.plan_json)) {
+      const plan = buildDefaultCouplesPlan();
+      await saveMealPlan(userId, plan, 'seed');
+    }
+    const events = await listScheduledEvents(userId);
+    if (events.length === 0) {
+      await bulkInsertScheduledEvents(userId, defaultScheduledEvents());
+    }
+    const list = await getOrCreateShoppingList(userId, null);
+    const items = await getShoppingItems(list.id);
+    if (items.length === 0) {
+      const latest = await getLatestMealPlan(userId);
+      const grocery = (latest?.plan_json?.grocery) || buildDefaultCouplesPlan().grocery;
+      await bulkInsertShoppingItems(list.id, groceryToShoppingItems(grocery));
+    }
+  } catch (err) {
+    console.warn('Seed household defaults failed:', err?.message || err);
+  }
 }
 
 // POST /api/auth/signup
@@ -39,11 +78,12 @@ router.post('/signup', async (req, res) => {
     const user = await createUser(email, passwordHash);
 
     if (!user) {
-      // No DB — issue ephemeral token
       const token = signToken(0);
       res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
       return res.json({ user: { id: 0, email }, persisted: false, onboardingComplete: false });
     }
+
+    await seedHouseholdDefaults(user.id);
 
     const token = signToken(user.id);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
@@ -73,6 +113,8 @@ router.post('/signin', async (req, res) => {
     if (!valid) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
+
+    await seedHouseholdDefaults(user.id);
 
     const token = signToken(user.id);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);

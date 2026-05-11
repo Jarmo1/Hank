@@ -56,6 +56,9 @@ export async function initDb() {
     )
   `);
 
+  // Add timezone column (couples plan / scheduler relies on it).
+  await pool.query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'Australia/Brisbane'`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meal_plans (
       id SERIAL PRIMARY KEY,
@@ -146,6 +149,48 @@ export async function initDb() {
       endpoint TEXT NOT NULL,
       tokens_used INTEGER,
       model TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // ── Couples-plan additions ────────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shopping_lists (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      week_start_date DATE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, week_start_date)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shopping_list_items (
+      id SERIAL PRIMARY KEY,
+      list_id INTEGER REFERENCES shopping_lists(id) ON DELETE CASCADE,
+      category TEXT,
+      name TEXT NOT NULL,
+      qty TEXT,
+      checked BOOLEAN DEFAULT FALSE,
+      source TEXT DEFAULT 'auto',
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scheduled_events (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      label TEXT NOT NULL,
+      time_local TEXT NOT NULL,
+      days_of_week INTEGER[] NOT NULL DEFAULT '{}',
+      message TEXT,
+      enabled BOOLEAN DEFAULT TRUE,
+      last_sent_date DATE,
+      sort_order INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
@@ -246,6 +291,15 @@ export async function upsertProfile(userId, data) {
   return result.rows[0];
 }
 
+export async function setUserTimezone(userId, tz) {
+  if (!pool) return null;
+  await pool.query(
+    `INSERT INTO user_profiles (user_id, timezone) VALUES ($1,$2)
+     ON CONFLICT (user_id) DO UPDATE SET timezone = EXCLUDED.timezone, updated_at = NOW()`,
+    [userId, tz]
+  );
+}
+
 // ── Meal Plans ─────────────────────────────────────────────────────
 
 export async function saveMealPlan(userId, planJson, source = 'ai', weekStartDate = null) {
@@ -257,6 +311,15 @@ export async function saveMealPlan(userId, planJson, source = 'ai', weekStartDat
   return result.rows[0];
 }
 
+export async function updateMealPlan(userId, planId, planJson) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `UPDATE meal_plans SET plan_json = $1 WHERE id = $2 AND user_id = $3 RETURNING id, created_at`,
+    [JSON.stringify(planJson), planId, userId]
+  );
+  return r.rows[0] || null;
+}
+
 export async function getLatestMealPlan(userId) {
   if (!pool) return null;
   const result = await pool.query(
@@ -264,6 +327,15 @@ export async function getLatestMealPlan(userId) {
     [userId]
   );
   return result.rows[0] || null;
+}
+
+export async function listMealPlans(userId, limit = 10) {
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT id, week_start_date, source, created_at FROM meal_plans WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit]
+  );
+  return r.rows;
 }
 
 // ── Workout Plans ──────────────────────────────────────────────────
@@ -410,4 +482,174 @@ export async function getPushSubscription(userId) {
     [userId]
   );
   return result.rows[0] || null;
+}
+
+export async function deletePushSubscriptionByEndpoint(endpoint) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+}
+
+// ── Shopping Lists ─────────────────────────────────────────────────
+
+export async function getOrCreateShoppingList(userId, weekStartDate) {
+  if (!pool) return null;
+  const existing = await pool.query(
+    `SELECT * FROM shopping_lists WHERE user_id = $1 AND week_start_date = $2`,
+    [userId, weekStartDate]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+  const created = await pool.query(
+    `INSERT INTO shopping_lists (user_id, week_start_date) VALUES ($1,$2) RETURNING *`,
+    [userId, weekStartDate]
+  );
+  return created.rows[0];
+}
+
+export async function getLatestShoppingList(userId) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `SELECT * FROM shopping_lists WHERE user_id = $1 ORDER BY week_start_date DESC NULLS LAST, created_at DESC LIMIT 1`,
+    [userId]
+  );
+  return r.rows[0] || null;
+}
+
+export async function getShoppingItems(listId) {
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT * FROM shopping_list_items WHERE list_id = $1 ORDER BY sort_order ASC, id ASC`,
+    [listId]
+  );
+  return r.rows;
+}
+
+export async function addShoppingItem(listId, item) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `INSERT INTO shopping_list_items (list_id, category, name, qty, source, sort_order, checked)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [listId, item.category || null, item.name, item.qty || null, item.source || 'manual', item.sortOrder || 0, item.checked || false]
+  );
+  return r.rows[0];
+}
+
+export async function updateShoppingItem(itemId, listId, patch) {
+  if (!pool) return null;
+  const fields = [];
+  const values = [];
+  let i = 1;
+  if (patch.name !== undefined)     { fields.push(`name = $${i++}`);     values.push(patch.name); }
+  if (patch.qty !== undefined)      { fields.push(`qty = $${i++}`);      values.push(patch.qty); }
+  if (patch.category !== undefined) { fields.push(`category = $${i++}`); values.push(patch.category); }
+  if (patch.checked !== undefined)  { fields.push(`checked = $${i++}`);  values.push(patch.checked); }
+  if (fields.length === 0) return null;
+  values.push(itemId, listId);
+  const r = await pool.query(
+    `UPDATE shopping_list_items SET ${fields.join(', ')} WHERE id = $${i++} AND list_id = $${i} RETURNING *`,
+    values
+  );
+  return r.rows[0] || null;
+}
+
+export async function deleteShoppingItem(itemId, listId) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM shopping_list_items WHERE id = $1 AND list_id = $2`, [itemId, listId]);
+}
+
+export async function clearAutoShoppingItems(listId) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM shopping_list_items WHERE list_id = $1 AND source = 'auto'`, [listId]);
+}
+
+export async function clearCheckedShoppingItems(listId) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM shopping_list_items WHERE list_id = $1 AND checked = TRUE`, [listId]);
+}
+
+export async function bulkInsertShoppingItems(listId, items) {
+  if (!pool || !items?.length) return;
+  const values = [];
+  const placeholders = items.map((it, idx) => {
+    const base = idx * 6;
+    values.push(listId, it.category || null, it.name, it.qty || null, it.source || 'auto', idx);
+    return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6})`;
+  });
+  await pool.query(
+    `INSERT INTO shopping_list_items (list_id, category, name, qty, source, sort_order) VALUES ${placeholders.join(', ')}`,
+    values
+  );
+}
+
+// ── Scheduled Events (meal reminders, pilates, custom) ────────────
+
+export async function listScheduledEvents(userId) {
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT * FROM scheduled_events WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+    [userId]
+  );
+  return r.rows;
+}
+
+export async function listDueScheduledEvents() {
+  if (!pool) return [];
+  const r = await pool.query(`
+    SELECT e.*, p.timezone AS tz, s.endpoint, s.p256dh, s.auth
+    FROM scheduled_events e
+    JOIN push_subscriptions s ON s.user_id = e.user_id
+    LEFT JOIN user_profiles p ON p.user_id = e.user_id
+    WHERE e.enabled = TRUE
+  `);
+  return r.rows;
+}
+
+export async function createScheduledEvent(userId, ev) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `INSERT INTO scheduled_events (user_id, kind, label, time_local, days_of_week, message, enabled, sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [userId, ev.kind || 'custom', ev.label, ev.timeLocal, ev.daysOfWeek || [], ev.message || null, ev.enabled !== false, ev.sortOrder || 0]
+  );
+  return r.rows[0];
+}
+
+export async function updateScheduledEvent(userId, id, patch) {
+  if (!pool) return null;
+  const fields = [];
+  const values = [];
+  let i = 1;
+  if (patch.label !== undefined)      { fields.push(`label = $${i++}`);        values.push(patch.label); }
+  if (patch.timeLocal !== undefined)  { fields.push(`time_local = $${i++}`);   values.push(patch.timeLocal); }
+  if (patch.daysOfWeek !== undefined) { fields.push(`days_of_week = $${i++}`); values.push(patch.daysOfWeek); }
+  if (patch.message !== undefined)    { fields.push(`message = $${i++}`);      values.push(patch.message); }
+  if (patch.enabled !== undefined)    { fields.push(`enabled = $${i++}`);      values.push(patch.enabled); }
+  if (fields.length === 0) return null;
+  values.push(id, userId);
+  const r = await pool.query(
+    `UPDATE scheduled_events SET ${fields.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
+    values
+  );
+  return r.rows[0] || null;
+}
+
+export async function deleteScheduledEvent(userId, id) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM scheduled_events WHERE id = $1 AND user_id = $2`, [id, userId]);
+}
+
+export async function markScheduledEventSent(id, sentDate) {
+  if (!pool) return;
+  await pool.query(`UPDATE scheduled_events SET last_sent_date = $1 WHERE id = $2`, [sentDate, id]);
+}
+
+export async function bulkInsertScheduledEvents(userId, events) {
+  if (!pool || !events?.length) return;
+  for (let idx = 0; idx < events.length; idx++) {
+    const ev = events[idx];
+    await pool.query(
+      `INSERT INTO scheduled_events (user_id, kind, label, time_local, days_of_week, message, enabled, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)`,
+      [userId, ev.kind, ev.label, ev.timeLocal, ev.daysOfWeek, ev.message || null, idx]
+    );
+  }
 }

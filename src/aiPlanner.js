@@ -130,6 +130,34 @@ Rules: days array length MUST equal workout_days. Respect equipment and injuries
   return callAI(system, user);
 }
 
+// Generates a NEW couples weekly plan that follows the exact JSON shape of the
+// current plan (so the frontend keeps working). Stays Australian, budget-aware,
+// keeps the meat/rice/tuna/eggs/potatoes/pasta staples, varies dinners.
+export async function generateCouplesWeeklyPlan(currentPlan, _profile = null) {
+  if (!client) return null;
+  const system = `You are a practical Australian dietitian writing a weekly meal plan for a couple. ` +
+    `One person is cutting (75kg → 65kg), the other is gaining muscle. Same meals, different portions. ` +
+    `Budget-friendly Aldi/Coles staples. Return VALID JSON only that matches the shape of the provided current plan exactly.`;
+
+  const example = JSON.stringify(currentPlan).slice(0, 6000);
+  const user = `Here is the current week's plan as a JSON example. Generate a NEW week that follows the SAME JSON shape ` +
+    `(top-level keys: title, subtitle, her, him, days, grocery, notes; each day has id, day, meals[] with id like "monday:lunch", type, name, her[], him[]). ` +
+    `Days must be monday..sunday in order. Vary dinners. Keep breakfast identical every day (Greek yoghurt + granola pattern). ` +
+    `Use metric units. Keep ingredient lists short and shoppable. Update the grocery array to match the new week. ` +
+    `Example plan:\n${example}`;
+
+  const plan = await callAI(system, user);
+  if (!plan?.days || !Array.isArray(plan.days)) return null;
+  // Ensure meal IDs exist (some models forget them).
+  for (const d of plan.days) {
+    if (!d?.day || !Array.isArray(d.meals)) continue;
+    for (const m of d.meals) {
+      if (!m.id && m.type) m.id = `${d.day}:${m.type}`;
+    }
+  }
+  return plan;
+}
+
 // Legacy export for backward compatibility
 export async function generateAiPlan(profile) {
   const [meal, workout] = await Promise.all([
