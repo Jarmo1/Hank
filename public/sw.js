@@ -56,10 +56,10 @@ self.addEventListener('fetch', e => {
 
 // Push notifications
 self.addEventListener('push', e => {
-  let data = { title: 'Hank', body: 'Reminder', url: '/' };
+  let data = { title: "Jarmo's Meals", body: 'Reminder', url: '/' };
   try { if (e.data) data = Object.assign(data, e.data.json()); } catch {}
   e.waitUntil(
-    self.registration.showNotification(data.title || 'Hank', {
+    self.registration.showNotification(data.title || "Jarmo's Meals", {
       body: data.body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
