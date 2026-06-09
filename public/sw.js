@@ -1,8 +1,9 @@
-const CACHE = 'hank-v2';
+const CACHE = 'hank-v3';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
+  '/run.css',
   '/main.js',
   '/manifest.json'
 ];
@@ -39,7 +40,22 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Cache-first for shell assets
+  // Network-first for app shell so new deploys show up without a hard refresh;
+  // fall back to cache when offline.
+  if (url.origin === location.origin && (e.request.mode === 'navigate' || SHELL.includes(url.pathname))) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(e.request).then(c => c || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Cache-first for everything else (icons, etc.)
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
