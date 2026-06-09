@@ -15,6 +15,8 @@ import shoppingRouter from './routes/shopping.js';
 import scheduleRouter from './routes/schedule.js';
 import pushRouter from './routes/push.js';
 import pinRouter from './routes/pin.js';
+import runRouter from './routes/run.js';
+import stravaRouter from './routes/strava.js';
 import { startScheduler } from './scheduler.js';
 
 const app = express();
@@ -55,6 +57,11 @@ app.use('/api/couples-plan', apiLimiter, couplesPlanRouter);
 app.use('/api/shopping', apiLimiter, shoppingRouter);
 app.use('/api/schedule', apiLimiter, scheduleRouter);
 app.use('/api/push', apiLimiter, pushRouter);
+
+app.use('/api/run', apiLimiter, runRouter);
+// Strava webhook (Strava's own GET/POST) must not be rate-limited away; the
+// router itself only auth-gates the user-facing endpoints.
+app.use('/api/strava', stravaRouter);
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));

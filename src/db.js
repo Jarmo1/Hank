@@ -218,10 +218,39 @@ export async function initDb() {
     )
   `);
 
+  // Run training plans (ultra/marathon). plan_json holds weeks[].sessions[] with
+  // each session's completed flag + matched Strava activity.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS run_plans (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      plan_json JSONB NOT NULL,
+      race_date DATE,
+      race_distance_km NUMERIC,
+      active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Strava OAuth tokens (one connected athlete per app user).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS strava_accounts (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      athlete_id BIGINT UNIQUE,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      expires_at BIGINT,
+      scope TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   console.log('Hank database ready.');
 }
 
-// ── Users ──────────────────────────────────────────────────────────
+// ── Users ─────────────────────────────────────
 
 export async function createUser(email, passwordHash) {
   if (!pool) return null;
@@ -261,7 +290,7 @@ export async function ensureHouseholdUser() {
   return created.rows[0].id;
 }
 
-// ── Household PIN ────────────────────────────────────────────────────
+// ── Household PIN ────────────────────────────────
 export async function getHouseholdSettings() {
   if (!pool) return null;
   const r = await pool.query(`SELECT * FROM household_settings WHERE id = 1`);
@@ -289,7 +318,7 @@ export async function clearHouseholdPin() {
   await pool.query(`UPDATE household_settings SET pin_hash = NULL, updated_at = NOW() WHERE id = 1`);
 }
 
-// ── Profiles ─────────────────────────────────────────────────────────
+// ── Profiles ──────────────────────────────────
 export async function getProfile(userId) {
   if (!pool) return null;
   const result = await pool.query(`SELECT * FROM user_profiles WHERE user_id = $1`, [userId]);
@@ -349,7 +378,7 @@ export async function setUserTimezone(userId, tz) {
   );
 }
 
-// ── Meal Plans ─────────────────────────────────────────────────────
+// ── Meal Plans ──────────────────────────────
 export async function saveMealPlan(userId, planJson, source = 'ai', weekStartDate = null) {
   if (!pool) return null;
   const result = await pool.query(
@@ -386,7 +415,7 @@ export async function listMealPlans(userId, limit = 10) {
   return r.rows;
 }
 
-// ── Workout Plans ───────────────────────────────────────────────────
+// ── Workout Plans ──────────────────────────────
 export async function saveWorkoutPlan(userId, planJson, source = 'ai') {
   if (!pool) return null;
   await pool.query(`UPDATE workout_plans SET active = FALSE WHERE user_id = $1`, [userId]);
@@ -406,7 +435,7 @@ export async function getActiveWorkoutPlan(userId) {
   return result.rows[0] || null;
 }
 
-// ── Workout Sessions ───────────────────────────────────────────────
+// ── Workout Sessions ──────────────────────────
 export async function saveWorkoutSession(userId, data) {
   if (!pool) return null;
   const result = await pool.query(`
@@ -433,7 +462,7 @@ export async function getWorkoutSessions(userId, limit = 20) {
   return result.rows;
 }
 
-// ── Progress Logs ──────────────────────────────────────────────────
+// ── Progress Logs ────────────────────────────
 export async function upsertProgressLog(userId, date, data) {
   if (!pool) return null;
   const result = await pool.query(`
@@ -471,7 +500,7 @@ export async function getProgressLogs(userId, days = 30) {
   return result.rows;
 }
 
-// ── Food Logs ──────────────────────────────────────────────────────
+// ── Food Logs ──────────────────────────────
 
 export async function saveFoodLog(userId, entry) {
   if (!pool) return { id: null, persisted: false };
@@ -496,7 +525,7 @@ export async function getTodayFoodLogs(userId) {
   return result.rows;
 }
 
-// ── Push Subscriptions ─────────────────────────────────────────────
+// ── Push Subscriptions ────────────────────────
 export async function savePushSubscription(userId, sub) {
   if (!pool) return null;
   await pool.query(`
@@ -515,12 +544,21 @@ export async function getPushSubscription(userId) {
   return result.rows[0] || null;
 }
 
+export async function getAllPushSubscriptions(userId) {
+  if (!pool) return [];
+  const result = await pool.query(
+    `SELECT * FROM push_subscriptions WHERE user_id = $1 ORDER BY id DESC`,
+    [userId]
+  );
+  return result.rows;
+}
+
 export async function deletePushSubscriptionByEndpoint(endpoint) {
   if (!pool) return;
   await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
 }
 
-// ── Shopping Lists ─────────────────────────────────────────────────
+// ── Shopping Lists ──────────────────────────
 export async function getOrCreateShoppingList(userId, weekStartDate) {
   if (!pool) return null;
   const existing = await pool.query(
@@ -608,7 +646,7 @@ export async function bulkInsertShoppingItems(listId, items) {
   );
 }
 
-// ── Scheduled Events ─────────────────────────────────────────────────
+// ── Scheduled Events ────────────────────────────
 export async function listScheduledEvents(userId) {
   if (!pool) return [];
   const r = await pool.query(
@@ -677,4 +715,77 @@ export async function bulkInsertScheduledEvents(userId, events) {
       [userId, ev.kind, ev.label, ev.timeLocal, ev.daysOfWeek, ev.message || null, idx]
     );
   }
+}
+
+// ── Run Plans ────────────────────────────────
+export async function saveRunPlan(userId, planJson, raceDate, raceDistanceKm) {
+  if (!pool) return null;
+  await pool.query(`UPDATE run_plans SET active = FALSE WHERE user_id = $1`, [userId]);
+  const r = await pool.query(
+    `INSERT INTO run_plans (user_id, plan_json, race_date, race_distance_km, active)
+     VALUES ($1,$2,$3,$4,TRUE) RETURNING id, created_at`,
+    [userId, JSON.stringify(planJson), raceDate || null, raceDistanceKm || null]
+  );
+  return r.rows[0];
+}
+
+export async function getActiveRunPlan(userId) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `SELECT * FROM run_plans WHERE user_id = $1 AND active = TRUE ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+  return r.rows[0] || null;
+}
+
+export async function updateRunPlan(userId, planId, planJson) {
+  if (!pool) return null;
+  const r = await pool.query(
+    `UPDATE run_plans SET plan_json = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3 RETURNING id, updated_at`,
+    [JSON.stringify(planJson), planId, userId]
+  );
+  return r.rows[0] || null;
+}
+
+// ── Strava Accounts ───────────────────────────
+export async function saveStravaAccount(userId, t) {
+  if (!pool) return null;
+  const r = await pool.query(`
+    INSERT INTO strava_accounts (user_id, athlete_id, access_token, refresh_token, expires_at, scope, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,NOW())
+    ON CONFLICT (user_id) DO UPDATE SET
+      athlete_id = EXCLUDED.athlete_id,
+      access_token = EXCLUDED.access_token,
+      refresh_token = EXCLUDED.refresh_token,
+      expires_at = EXCLUDED.expires_at,
+      scope = EXCLUDED.scope,
+      updated_at = NOW()
+    RETURNING user_id
+  `, [userId, t.athleteId || null, t.accessToken, t.refreshToken, t.expiresAt || null, t.scope || null]);
+  return r.rows[0];
+}
+
+export async function updateStravaTokens(userId, t) {
+  if (!pool) return null;
+  await pool.query(
+    `UPDATE strava_accounts SET access_token=$1, refresh_token=$2, expires_at=$3, updated_at=NOW() WHERE user_id=$4`,
+    [t.accessToken, t.refreshToken, t.expiresAt || null, userId]
+  );
+}
+
+export async function getStravaAccountByUser(userId) {
+  if (!pool) return null;
+  const r = await pool.query(`SELECT * FROM strava_accounts WHERE user_id = $1`, [userId]);
+  return r.rows[0] || null;
+}
+
+export async function getStravaAccountByAthlete(athleteId) {
+  if (!pool) return null;
+  const r = await pool.query(`SELECT * FROM strava_accounts WHERE athlete_id = $1`, [athleteId]);
+  return r.rows[0] || null;
+}
+
+export async function deleteStravaAccount(userId) {
+  if (!pool) return;
+  await pool.query(`DELETE FROM strava_accounts WHERE user_id = $1`, [userId]);
 }
