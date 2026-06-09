@@ -1,0 +1,34 @@
+/* Run / training plan view — layered on top of styles.css */
+.run-prog { height: 8px; border-radius: 99px; background: rgba(0,0,0,0.08); margin-top: 12px; overflow: hidden; }
+.run-prog-bar { height: 100%; background: linear-gradient(90deg, #fc5200, #ff7a33); border-radius: 99px; transition: width .3s ease; }
+
+.run-weeknav { display: flex; align-items: center; gap: 10px; margin: 4px 2px 12px; }
+.run-weeknav .icon-btn { flex: 0 0 auto; }
+.run-weeknav .icon-btn[data-dir="1"] svg { transform: rotate(180deg); }
+.run-weektitle { flex: 1; text-align: center; }
+
+.run-row { display: flex; align-items: flex-start; gap: 12px; background: #fff; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; }
+.run-row.done { background: #f4faf5; border-color: rgba(34,160,84,0.25); }
+.run-check { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.18); background: transparent; color: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.run-check svg { width: 16px; height: 16px; }
+.run-check.on { background: #22a054; border-color: #22a054; color: #fff; }
+.run-body { flex: 1; min-width: 0; }
+.run-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.run-title { font-weight: 650; }
+.run-date { font-size: 12px; color: #8a8f98; white-space: nowrap; }
+.run-sub { font-size: 13px; color: #5a6068; margin-top: 2px; }
+.run-note { font-size: 12px; color: #8a8f98; margin-top: 4px; line-height: 1.35; }
+
+/* left accent by session type */
+.run-row.type-long    { border-left: 4px solid #fc5200; }
+.run-row.type-threshold { border-left: 4px solid #e0a800; }
+.run-row.type-intervals { border-left: 4px solid #d63384; }
+.run-row.type-hills   { border-left: 4px solid #6f42c1; }
+.run-row.type-easy    { border-left: 4px solid #2f9e44; }
+.run-row.type-recovery { border-left: 4px solid #74c0fc; }
+.run-row.type-race    { border-left: 4px solid #111; background: #fff7f2; }
+
+.pace-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pace-cell { background: rgba(0,0,0,0.03); border-radius: 12px; padding: 8px; text-align: center; }
+.pace-cell .pk { font-size: 11px; text-transform: capitalize; color: #8a8f98; }
+.pace-cell .pv { font-weight: 650; margin-top: 2px; }

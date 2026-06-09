@@ -20,6 +20,11 @@
     pushSubscribed: false,
     tab: 'today',
     selectedDay: DAYS[new Date().getDay()],
+    // Run plan state
+    run: null,            // full plan json (meta + weeks)
+    runPlanId: null,
+    runWeekIdx: 0,        // which week the Run tab is showing
+    strava: { connected: false, athleteId: null, configured: false },
     // PIN screen state
     pinMode: 'enter',   // 'enter' | 'create-1' | 'create-2'
     pinBuffer: '',
@@ -67,7 +72,8 @@
     refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>',
     yoga:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v5l-4 3 3 6"/><path d="M12 12l4 3-3 6"/><path d="M5 13h14"/></svg>',
     fork:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v8a2 2 0 1 1-4 0V2M5 10v12"/><path d="M17 2c-2 0-3 2-3 5s1 5 3 5v10"/></svg>',
-    back:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>'
+    back:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>',
+    run:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="4.5" r="1.8"/><path d="M12 9l-3 3 2 3 1 5"/><path d="M12 9l4 2 3-1"/><path d="M11 12l-2 1-3-1"/><path d="M13 20l-2-3"/></svg>'
   };
 
   // ------- helpers -------
@@ -113,6 +119,7 @@
     return '<nav class="tabbar">' +
       tab('today', I.home, 'Today') +
       tab('plan', I.cal, 'Plan') +
+      tab('run', I.run, 'Run') +
       tab('shopping', I.cart, 'Shopping') +
       tab('schedule', I.bell, 'Schedule') +
       tab('settings', I.gear, 'Settings') +
@@ -323,6 +330,15 @@
             : '<div class="small muted mt-12">Server VAPID keys not configured. Run <code>npx web-push generate-vapid-keys</code> and set <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code>.</div>') +
           '<div class="small muted mt-12">iOS tip: add the app to your home screen first, then enable.</div>' +
         '</div>' +
+        (State.strava.configured
+          ? ('<div class="card">' +
+            '<div class="bold">Strava</div>' +
+            '<div class="kv"><div class="k">Status</div><div class="v">' + (State.strava.connected ? 'Connected' : 'Not connected') + '</div></div>' +
+            (State.strava.connected
+              ? '<button class="btn btn-danger btn-block mt-12" data-action="strava-disconnect">Disconnect Strava</button>'
+              : '<button class="btn btn-primary btn-block mt-12" data-action="strava-connect">Connect Strava</button>') +
+          '</div>')
+          : '') +
         '<div class="card">' +
           '<div class="bold">Timezone</div>' +
           '<div class="kv"><div class="k">Current</div><div class="v">' + escapeHTML(State.schedule.timezone || '') + '</div></div>' +
@@ -332,11 +348,130 @@
       '</div>';
   }
 
+  // ------- Run plan -------
+  function renderRunOnboarding() {
+    return renderTopbar('Training') +
+      '<div class="page">' +
+        '<div class="hero"><h2>Build your plan</h2><div class="sub">A periodized plan to your goal race — tick off runs as you go.</div></div>' +
+        '<form class="card" data-action="build-run-plan">' +
+          '<div class="field"><label>Race</label>' +
+            '<select name="raceDistanceKm">' +
+              '<option value="50" selected>50km ultra</option>' +
+              '<option value="42.2">Marathon (42.2km)</option>' +
+              '<option value="21.1">Half marathon</option>' +
+              '<option value="100">100km ultra</option>' +
+            '</select></div>' +
+          '<div class="field"><label>Race date</label><input type="date" name="raceDate" required /></div>' +
+          '<div class="field"><label>Goal</label>' +
+            '<select name="goal"><option value="finish" selected>Finish strong</option><option value="time">Hit a time</option></select></div>' +
+          '<div class="field"><label>Days you can run</label>' +
+            '<div class="day-toggles" data-run-days>' +
+              ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d =>
+                '<button type="button" class="day-toggle ' + (['Tue','Wed','Thu','Sat','Sun'].includes(d)?'on':'') + '" data-action="run-day-toggle" data-d="' + d + '">' + d[0] + '</button>'
+              ).join('') +
+            '</div></div>' +
+          '<div class="field"><label>Long run day</label>' +
+            '<select name="longRunDay"><option>Sun</option><option>Sat</option><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option></select></div>' +
+          '<div class="field"><label>Current weekly distance (km)</label><input type="number" name="currentWeeklyKm" min="0" step="1" placeholder="e.g. 35" /></div>' +
+          '<div class="field"><label>Longest recent run (km)</label><input type="number" name="longestRecentKm" min="0" step="1" placeholder="e.g. 18" /></div>' +
+          '<div class="section-title" style="margin-top:6px">Current fitness (optional, sets your paces)</div>' +
+          '<div class="row gap-6">' +
+            '<div class="field" style="flex:1"><label>Recent race dist (km)</label><input type="number" name="recentRaceDistanceKm" min="1" step="0.1" placeholder="10" /></div>' +
+            '<div class="field" style="flex:1"><label>Time (mm:ss or h:mm:ss)</label><input type="text" name="recentRaceTime" placeholder="52:00" /></div>' +
+          '</div>' +
+          '<div class="field"><label>…or your easy pace (mm:ss /km)</label><input type="text" name="easyPace" placeholder="6:30" /></div>' +
+          '<button type="submit" class="btn btn-primary btn-block mt-12">' + I.spark + '<span>Generate plan</span></button>' +
+        '</form>' +
+        (State.strava.configured
+          ? ('<div class="card">' +
+            '<div class="bold">Strava</div>' +
+            '<div class="small muted" style="margin-top:2px">Connect so finished runs tick off automatically.</div>' +
+            (State.strava.connected
+              ? '<div class="kv mt-12"><div class="k">Status</div><div class="v">Connected ✓</div></div>'
+              : '<button class="btn btn-secondary btn-block mt-12" data-action="strava-connect">Connect Strava</button>') +
+          '</div>')
+          : '') +
+      '</div>';
+  }
+
+  function runProgress(plan) {
+    let done = 0, total = 0, kmDone = 0, kmTotal = 0;
+    for (const w of plan.weeks) for (const s of w.sessions) {
+      if (s.type === 'rest') continue;
+      total++; kmTotal += s.distanceKm || 0;
+      if (s.completed) { done++; kmDone += (s.actual?.distanceKm || s.distanceKm || 0); }
+    }
+    return { done, total, kmDone: Math.round(kmDone), kmTotal: Math.round(kmTotal) };
+  }
+
+  function renderSessionRow(s) {
+    if (s.type === 'rest') return '';
+    const done = s.completed;
+    const sub = done && s.actual
+      ? (s.actual.distanceKm + 'km' + (s.actual.pace ? ' @ ' + s.actual.pace : '') + (s.stravaActivityId ? ' · Strava' : ''))
+      : ((s.distanceKm ? s.distanceKm + 'km' : '') + (s.paceTarget ? ' @ ' + s.paceTarget : ''));
+    const d = new Date(s.date);
+    const dlabel = d.toLocaleDateString('en-AU', { weekday:'short', day:'numeric' });
+    return '<div class="run-row ' + (done?'done':'') + ' type-' + s.type + '">' +
+      '<button class="run-check ' + (done?'on':'') + '" data-action="tick-session" data-id="' + escapeHTML(s.id) + '" data-done="' + (done?'1':'0') + '" aria-label="Toggle">' + I.check + '</button>' +
+      '<div class="run-body">' +
+        '<div class="run-top"><span class="run-title">' + escapeHTML(s.title) + '</span><span class="run-date">' + escapeHTML(dlabel) + '</span></div>' +
+        '<div class="run-sub">' + escapeHTML(sub) + '</div>' +
+        (s.notes ? '<div class="run-note">' + escapeHTML(s.notes) + '</div>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderRun() {
+    if (!State.run) return renderRunOnboarding();
+    const plan = State.run;
+    const meta = plan.meta || {};
+    const nWeeks = plan.weeks.length;
+    if (State.runWeekIdx >= nWeeks) State.runWeekIdx = nWeeks - 1;
+    if (State.runWeekIdx < 0) State.runWeekIdx = 0;
+    const w = plan.weeks[State.runWeekIdx];
+    const pr = runProgress(plan);
+    const pct = pr.total ? Math.round(pr.done / pr.total * 100) : 0;
+
+    const daysToRace = Math.max(0, Math.round((new Date(meta.raceDate) - new Date()) / 864e5));
+    const sessions = w.sessions.filter(s => s.type !== 'rest').map(renderSessionRow).join('');
+
+    return renderTopbar('Training') +
+      '<div class="page">' +
+        '<div class="hero">' +
+          '<h2>' + escapeHTML(meta.raceDistanceKm + 'km') + ' · ' + daysToRace + ' days to go</h2>' +
+          '<div class="sub">Race ' + escapeHTML(meta.raceDate || '') + ' · ' + pr.done + '/' + pr.total + ' sessions · ' + pr.kmDone + '/' + pr.kmTotal + 'km</div>' +
+          '<div class="run-prog"><div class="run-prog-bar" style="width:' + pct + '%"></div></div>' +
+        '</div>' +
+        (State.strava.configured
+          ? (State.strava.connected
+              ? '<div class="row between" style="margin:2px 4px 10px"><div class="small muted">Strava connected ✓</div><button class="link-btn" data-action="strava-sync">Sync now</button></div>'
+              : '<div class="card" style="margin-bottom:10px"><div class="row between"><div class="small">Auto-tick your runs</div><button class="btn btn-primary" data-action="strava-connect">Connect Strava</button></div></div>')
+          : '') +
+        '<div class="run-weeknav">' +
+          '<button class="icon-btn" data-action="run-week" data-dir="-1" aria-label="Previous">' + I.back + '</button>' +
+          '<div class="run-weektitle"><div class="bold">Week ' + w.week + ' / ' + nWeeks + ' · ' + escapeHTML(w.phase) + (w.deload?' (deload)':'') + '</div><div class="small muted">' + escapeHTML(w.startDate) + ' · target ' + w.targetKm + 'km</div></div>' +
+          '<button class="icon-btn" data-action="run-week" data-dir="1" aria-label="Next">' + I.back + '<span style="display:none"></span></button>' +
+        '</div>' +
+        sessions +
+        '<div class="card mt-12">' +
+          '<div class="bold">Your paces</div>' +
+          '<div class="small muted" style="margin-top:2px">Basis: ' + escapeHTML(meta.paceBasis || '') + '</div>' +
+          '<div class="pace-grid mt-12">' +
+            Object.entries(meta.paces || {}).map(([k,v]) => '<div class="pace-cell"><div class="pk">' + escapeHTML(k) + '</div><div class="pv">' + escapeHTML(v || '—') + '</div></div>').join('') +
+          '</div>' +
+        '</div>' +
+        (meta.warnings && meta.warnings.length ? '<div class="notes">' + meta.warnings.map(escapeHTML).join('<br>') + '</div>' : '') +
+        '<button class="btn btn-ghost btn-block mt-12" data-action="rebuild-run-plan">Rebuild plan</button>' +
+      '</div>';
+  }
+
   function renderHome() {
     let body = '';
     switch (State.tab) {
       case 'today':    body = renderToday(); break;
       case 'plan':     body = renderPlan(); break;
+      case 'run':      body = renderRun(); break;
       case 'shopping': body = renderShopping(); break;
       case 'schedule': body = renderSchedule(); break;
       case 'settings': body = renderSettings(); break;
@@ -688,6 +823,70 @@
       catch (err) { toast(err.message || 'Failed'); }
     },
 
+    // ------- Run plan actions -------
+    'run-day-toggle': (el, e) => { e && e.preventDefault(); el.classList.toggle('on'); },
+    'build-run-plan': async (el, e) => {
+      e && e.preventDefault();
+      const form = el.closest('form') || el;
+      const fd = new FormData(form);
+      const runDays = Array.from(form.querySelectorAll('[data-run-days] .day-toggle.on')).map(b => b.dataset.d);
+      if (!fd.get('raceDate')) { toast('Pick a race date'); return; }
+      if (runDays.length < 3) { toast('Pick at least 3 run days'); return; }
+      const payload = {
+        raceDate: fd.get('raceDate'),
+        raceDistanceKm: Number(fd.get('raceDistanceKm')) || 50,
+        goal: fd.get('goal') || 'finish',
+        runDays,
+        longRunDay: fd.get('longRunDay') || 'Sun',
+        currentWeeklyKm: Number(fd.get('currentWeeklyKm')) || 0,
+        longestRecentKm: Number(fd.get('longestRecentKm')) || 0,
+        recentRaceDistanceKm: fd.get('recentRaceDistanceKm') || null,
+        recentRaceTime: fd.get('recentRaceTime') || null,
+        easyPace: fd.get('easyPace') || null
+      };
+      toast('Building your plan…');
+      try {
+        const out = await apiPost('/api/run/plan', payload);
+        State.run = out.plan; State.runPlanId = out.planId; State.runWeekIdx = 0;
+        toast('Plan ready'); renderHome(); window.scrollTo(0, 0);
+      } catch (err) { toast(err.message || 'Failed'); }
+    },
+    'rebuild-run-plan': () => {
+      if (!confirm('Rebuild your plan from scratch? Your current ticks will be replaced.')) return;
+      State.run = null; renderHome();
+    },
+    'run-week': (el) => {
+      State.runWeekIdx += Number(el.dataset.dir);
+      renderHome(); window.scrollTo(0, 0);
+    },
+    'tick-session': async (el) => {
+      const id = el.dataset.id;
+      const wasDone = el.dataset.done === '1';
+      const next = !wasDone;
+      // optimistic
+      for (const w of State.run.weeks) for (const s of w.sessions) if (s.id === id) { s.completed = next; if (!next) { s.actual = null; s.stravaActivityId = null; } }
+      renderHome();
+      try { await apiPatch('/api/run/session', { sessionId: id, completed: next }); }
+      catch (err) {
+        for (const w of State.run.weeks) for (const s of w.sessions) if (s.id === id) s.completed = wasDone;
+        renderHome(); toast(err.message || 'Failed');
+      }
+    },
+    'strava-connect': () => { window.location.href = '/api/strava/connect'; },
+    'strava-disconnect': async () => {
+      if (!confirm('Disconnect Strava? Runs will no longer auto-tick.')) return;
+      try { await apiPost('/api/strava/disconnect', {}); State.strava = { connected: false, athleteId: null, configured: State.strava.configured }; toast('Strava disconnected'); renderHome(); }
+      catch (err) { toast(err.message || 'Failed'); }
+    },
+    'strava-sync': async () => {
+      toast('Syncing recent runs…');
+      try {
+        const out = await apiPost('/api/strava/sync', { days: 30 });
+        const r = await apiGet('/api/run/plan'); if (r.plan) State.run = r.plan;
+        toast('Ticked ' + (out.ticked || 0) + ' run(s)'); renderHome();
+      } catch (err) { toast(err.message || 'Sync failed'); }
+    },
+
     'push-on': async () => {
       try {
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Push not supported on this device'); return; }
@@ -722,6 +921,7 @@
       State.plan = null;
       State.shopping = { list: null, items: [] };
       State.schedule = { events: [], timezone: 'Australia/Brisbane' };
+      State.run = null; State.strava = { connected: false, athleteId: null, configured: false };
       State.pinMode = 'enter'; State.pinBuffer = ''; State.pinError = '';
       renderPin();
     }
@@ -772,13 +972,15 @@
       apiGet('/api/couples-plan').catch(() => null),
       apiGet('/api/shopping').catch(() => null),
       apiGet('/api/schedule').catch(() => null),
-      apiGet('/api/push/vapid').catch(() => ({ publicKey: null }))
+      apiGet('/api/push/vapid').catch(() => ({ publicKey: null })),
+      apiGet('/api/run/plan').catch(() => null)
     ];
-    const [plan, shopping, schedule, vapid] = await Promise.all(tasks);
+    const [plan, shopping, schedule, vapid, run] = await Promise.all(tasks);
     if (plan)     { State.plan = plan.plan; State.planId = plan.planId; State.planSource = plan.source; }
     if (shopping) State.shopping = shopping;
     if (schedule) State.schedule = schedule;
     if (vapid)    State.vapidKey = vapid.publicKey;
+    if (run)      { State.run = run.plan; State.runPlanId = run.planId; if (run.strava) State.strava = run.strava; }
     if ('serviceWorker' in navigator && 'PushManager' in window) {
       try {
         const reg = await navigator.serviceWorker.ready;
@@ -786,6 +988,19 @@
         State.pushSubscribed = Boolean(sub);
       } catch (_) {}
     }
+  }
+
+  function handleLaunchParams() {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const tab = q.get('tab');
+      const strava = q.get('strava');
+      if (tab) State.tab = tab;
+      if (strava === 'connected') { State.strava.connected = true; toast('Strava connected ✓'); }
+      else if (strava === 'denied') toast('Strava connection cancelled');
+      else if (strava === 'error') toast('Strava connection failed');
+      if (tab || strava) window.history.replaceState({}, '', window.location.pathname);
+    } catch (_) {}
   }
 
   async function boot() {
@@ -797,6 +1012,7 @@
     if (me && me.userId) {
       State.user = { id: me.userId };
       await loadAll();
+      handleLaunchParams();
       renderHome();
       return;
     }
